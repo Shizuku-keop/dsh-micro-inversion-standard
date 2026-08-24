@@ -137,6 +137,23 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\.dsh\.agent-presets\micro-inversio
   （缺失即降级，绝不阻塞请求）。
 - 阈值与压力口径与 `dsh-compaction-basic` 一致（0.8 / `totalTokens` / `contextWindow`）。
 
+## 一键发布（publish.ps1）
+
+仓库自带 `publish.ps1`：建仓 → 推送 → 打 tag → 创建 GitHub Release 并上传 zip 附件，
+一条命令完成（在**有外网**的机器上运行）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\publish.ps1 -Token <PAT>
+```
+
+- Token：classic PAT（`repo` scope）或 fine-grained PAT（`Administration:write` 建仓 +
+  `Contents:write` 推送）；token 只在本进程使用，推送完成后脚本会把本地 `origin`
+  改回不含 token 的干净 HTTPS 地址。
+- 开关：`-Visibility private`（默认 public）、`-SkipCreate`（仓库已存在）、
+  `-SkipRelease`（只推 tag 不建 Release）、`-Tag v1.0.1`、`-RepoName <name>`。
+- Release 附件来自 `dist\dsh-micro-inversion-standard-<tag>.zip`（`git archive` 产物，
+  不入库）。更新版本时先改 `package.json` 版本号与 `CHANGELOG.md`，再跑本脚本。
+
 ## 发布到 GitHub
 
 ### 1. 在 GitHub 上创建仓库
