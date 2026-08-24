@@ -14,8 +14,9 @@ if [ ! -d "$SRC" ]; then
   exit 1
 fi
 
-if [ -d "$DST" ]; then
+if [ -d "$DST" ] || [ -e "$DST" ]; then
   echo "Overwriting existing preset at: $DST"
+  rm -rf "$DST"
 fi
 
 mkdir -p "$(dirname "$DST")"
@@ -24,4 +25,4 @@ cp -R "$SRC" "$DST"
 echo
 echo "Installed: $DST"
 echo "Next: restart the dsh web service, create a new session,"
-echo "and pick 微逆标准模式 (Micro-Inversion Standard) from the preset selector."
+echo "and pick \"Micro-Inversion Standard\" from the preset selector."

@@ -19,12 +19,13 @@ if (-not (Test-Path $src)) {
 
 if (Test-Path $dst) {
   Write-Host "Overwriting existing preset at: $dst"
+  Remove-Item -Recurse -Force $dst
 }
 
-New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
 Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force
 
 Write-Host ''
 Write-Host "Installed: $dst"
 Write-Host 'Next: restart the dsh web service, create a new session,'
-Write-Host 'and pick 微逆标准模式 (Micro-Inversion Standard) from the preset selector.'
+Write-Host 'and pick "Micro-Inversion Standard" from the preset selector.'
