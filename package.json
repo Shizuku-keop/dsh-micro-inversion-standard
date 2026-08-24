@@ -1,0 +1,31 @@
+{
+  "name": "dsh-micro-inversion-standard",
+  "version": "1.0.0",
+  "description": "微逆标准模式 (Micro-Inversion Standard) — a two-phase, token-lean DSH agent preset that forces \"we need\" reasoning and slims context.",
+  "keywords": [
+    "dsh",
+    "agent-preset",
+    "we-need",
+    "context-slimming",
+    "kv-cache"
+  ],
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "files": [
+    "preset",
+    "install.ps1",
+    "install.sh",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/<your-name>/dsh-micro-inversion-standard.git"
+  },
+  "scripts": {
+    "install:win": "powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1",
+    "install:posix": "sh install.sh"
+  }
+}

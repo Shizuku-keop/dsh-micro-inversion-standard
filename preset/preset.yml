@@ -1,0 +1,6 @@
+name: 微逆标准模式 (Micro-Inversion Standard)
+description: >-
+  首轮锚定 Minimal 双工具（persistent bash/pwsh + str_replace_editor）并强制 "we need"
+  思维链起手式；首次工具调用或首次实质性回复后动态解锁完整标准工具目录；tools/post-execute
+  超长结果头尾裁剪并落盘；agent/pre-step 达 80% 上下文压力时中段压缩；保持系统提示词与
+  工具目录前缀稳定以最大化 KV Cache 命中。
