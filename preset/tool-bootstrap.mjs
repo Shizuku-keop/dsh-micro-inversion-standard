@@ -315,7 +315,12 @@ monologue. Long sessions and large contexts make this rule MORE important, not l
 if you notice yourself drifting, re-anchor immediately with "we need ...".
 
 Step cadence: think in short "we need → do → verify" cycles. No planning essays; no
-second-guessing after a result; commit, act, verify.`
+second-guessing after a result; commit, act, verify.
+
+Completeness clause (v3): brevity applies to REASONING, never to reporting. The final
+answer MUST include every fact you confirmed during the task and every fact the request
+asked for — dropping confirmed findings to save tokens is a failure, not efficiency.
+Before finishing, check the reply against the requested facts once.`
 }
 
 /**

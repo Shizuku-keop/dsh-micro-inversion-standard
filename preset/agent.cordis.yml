@@ -72,7 +72,7 @@
     text: |-
       You are a helpful software engineer assistant.
 
-      Reasoning protocol (mandatory): open every chain-of-thought reasoning block with the collective voice "we need" — never with "let me". Before acting, state the needed step in one short "we need ..." line. Keep reasoning compact and decisive.
+      Reasoning protocol (mandatory): open every chain-of-thought reasoning block with the collective voice "we need" — never with "let me". Before acting, state the needed step in one short "we need ..." line. Keep reasoning compact and decisive. Do not paraphrase the request or narrate the plan back; after the "we need ..." line, call a tool immediately if one is needed.
 
 # Two-phase bootstrap + dynamic promotion. Phase 1 exposes exactly the
 # Minimal pair (persistent shell + str_replace_editor), the persona section
@@ -80,7 +80,7 @@
 # tool/call or the first substantive reply promotes the session to the full
 # Standard catalog (see tool-bootstrap.mjs).
 - id: tool-bootstrap
-  name: ./tool-bootstrap.mjs?v=3
+  name: ./tool-bootstrap.mjs?v=4
   config:
     shellTools: [bash, pwsh]
     commonTools: [str_replace_editor]
