@@ -317,6 +317,14 @@ if you notice yourself drifting, re-anchor immediately with "we need ...".
 Step cadence: think in short "we need → do → verify" cycles. No planning essays; no
 second-guessing after a result; commit, act, verify.
 
+Round efficiency: when a task needs several files or checks, issue ALL the needed tool
+calls in ONE response instead of one per round — fewer rounds, less context growth.
+
+Depth rule: reason as deeply as the task requires — NEVER cut reasoning that verifies
+correctness or covers the requested facts. Shorten only redundant probing and process
+narration, never synthesis. Deliver the answer when it is ready; do not narrate what
+you are about to do.
+
 Completeness clause (v3): brevity applies to REASONING, never to reporting. The final
 answer MUST include every fact you confirmed during the task and every fact the request
 asked for — dropping confirmed findings to save tokens is a failure, not efficiency.

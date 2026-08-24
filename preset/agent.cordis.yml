@@ -80,7 +80,7 @@
 # tool/call or the first substantive reply promotes the session to the full
 # Standard catalog (see tool-bootstrap.mjs).
 - id: tool-bootstrap
-  name: ./tool-bootstrap.mjs?v=4
+  name: ./tool-bootstrap.mjs?v=6
   config:
     shellTools: [bash, pwsh]
     commonTools: [str_replace_editor]
@@ -378,3 +378,5 @@
   config:
     fetch: false
     searchTimeoutMs: 60000
+
+
