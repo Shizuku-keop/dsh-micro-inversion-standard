@@ -22,7 +22,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/<your-name>/dsh-micro-inversion-standard.git"
+    "url": "git+https://github.com/Shizuku-keop/dsh-micro-inversion-standard.git"
   },
   "scripts": {
     "install:win": "powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1",

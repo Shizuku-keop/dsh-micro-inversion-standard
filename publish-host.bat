@@ -22,7 +22,7 @@ echo   Step 2: push main branch + tag v1.0.0
 echo     (the first push opens a browser window to sign in to GitHub)
 git push -u origin main
 if errorlevel 1 goto :err
-git push origin v1.0.0
+git push --force origin v1.0.0
 if errorlevel 1 goto :err
 echo.
 echo ============================================================

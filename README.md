@@ -55,7 +55,7 @@ micro-inversion-standard/
 ### 方式 A：克隆仓库后运行安装脚本
 
 ```bash
-git clone https://github.com/<your-name>/dsh-micro-inversion-standard.git
+git clone https://github.com/Shizuku-keop/dsh-micro-inversion-standard.git
 cd dsh-micro-inversion-standard
 ```
 
@@ -172,7 +172,7 @@ git add .
 git commit -m "feat: package micro-inversion-standard as a reusable preset (v1.0.0)"
 
 # 关联远程（把地址换成第 1 步复制的）
-git remote add origin https://github.com/<your-name>/dsh-micro-inversion-standard.git
+git remote add origin https://github.com/Shizuku-keop/dsh-micro-inversion-standard.git
 
 # 推送到 main 分支
 git branch -M main
@@ -209,7 +209,7 @@ git push && git push origin v1.0.1
 
 ```bash
 # 方式 1：git 走 ghproxy 代理拉取/推送（推送仍需要你的凭据）
-git remote set-url origin https://ghproxy.net/https://github.com/<your-name>/dsh-micro-inversion-standard.git
+git remote set-url origin https://ghproxy.net/https://github.com/Shizuku-keop/dsh-micro-inversion-standard.git
 
 # 方式 2：配置 git 全局代理（HTTP(S) 代理）
 git config --global http.proxy http://127.0.0.1:7890
@@ -223,7 +223,7 @@ git config --global https.proxy http://127.0.0.1:7890
 本包默认 `"private": true`，防止误发布。若想支持 `npm i -g` 分发：
 
 1. 改 `package.json`：去掉 `"private": true`，把 `name` 改成未被占用的
-   `@<your-name>/dsh-micro-inversion-standard`（或 `dsh-micro-inversion-standard`）；
+   `@Shizuku-keop/dsh-micro-inversion-standard`（或 `dsh-micro-inversion-standard`）；
 2. 填好 `repository` 字段；
 3. `npm login` 后执行 `npm publish`（先跑一次 `npm publish --dry-run` 检查
    `files` 列表是否只含 `preset/` 与安装脚本、README、LICENSE）。

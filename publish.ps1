@@ -69,7 +69,7 @@ git remote add origin $authOrigin
 git branch -M main
 git push -u origin main
 git tag -f $Tag
-git push origin $Tag
+git push --force origin $Tag
 
 Write-Host "== 4/5 clean origin (drop token) =="
 git remote set-url origin "https://github.com/$owner/$RepoName.git"
