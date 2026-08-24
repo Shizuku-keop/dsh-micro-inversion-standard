@@ -114,11 +114,28 @@ micro-inversion 裁剪标记原文、以及标记里给出的完整结果保存�
 
 判定：思维链起手式全程为 "we need"，无 "let me"。
 
+## 测试 6 · v2 全局运行态（L1 认知换装 + L2 近场锚 + L3 结果锚）
+
+同一会话晋升后（发一次 `请用 pwsh 运行 Get-Location` 触发），检查会话日志
+（`session.export` 或 `session.jsonl.zstd`）：
+
+- **L1 换装**：晋升后任意 `request/header.system` 含 `collective execution unit`
+  与 `FORBIDDEN openers`（阶段一不含，晋升后含）；
+- **L2 近场锚**：日志中存在 `user/message` 事件，`source.kind ===
+  'micro-inversion-anchor'` 且文本含 `Open this next reasoning block`；
+- **L3 结果锚**：工具调用后存在同样 source.kind、文本含 `Result received` 的
+  `user/message` 事件；
+- **D 漂移检测**（代码层已验证，会话层需要长会话触发）：推理块起手词持续
+  违规 ≥3 次后，日志出现升级版锚文本（含 `DRIFT DETECTED`）与重述消息。
+
+判定：前四项全中即 v2 通过。
+
 ## 快速验收（30 秒版）
 
 1. 新会话发送 `请用 pwsh 运行 Get-Location`；
 2. 看第一条请求的工具清单是否为 2 个、推理是否以 "we need" 开头；
-3. 调用后看工具目录是否立即变完整；
+3. 调用后看工具目录是否立即变完整、晋升后 system prompt 是否出现
+   `collective execution unit`（L1）；
 4. 再发一次测试 3 的大输出命令，看是否出现 `trimmed` 标记 + `Full result:`。
 
 ## 失败排查
@@ -128,4 +145,6 @@ micro-inversion 裁剪标记原文、以及标记里给出的完整结果保存�
   （会降级为完整目录并告警一次），检查 agent.cordis.yml；
 - 大输出未裁剪 → 确认输出确实 >8192 字符，或检查 `context-slimmer` 的 `skipTools`；
 - 80% 压缩不出现 → 确认压力确实超过窗口 80%（`totalTokens` 口径）且路由模型的
-  `contextWindow` 已配置（窗口未知时静默跳过，属设计内的 best-effort）。
+  `contextWindow` 已配置（窗口未知时静默跳过，属设计内的 best-effort）；
+- 改了 `.mjs` 插件后行为没变 → 行名 `?v=N` 未递增（Node ESM 模块缓存），
+  bump 版本号再建新会话。 

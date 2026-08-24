@@ -18,11 +18,14 @@
  *
  * Promotion (dynamic, same session): the first durable tool call OR the first
  * substantive reply unlocks the FULL Standard catalog, restores runtime
- * contexts and every prompt section, and appends the session's working
- * directory to the persona. With `anchorGate: true` the tool-call promotion
- * additionally requires one "we need"-like reasoning block (contains `we`,
- * no `let me`) or the `maxBootstrapSteps` fallback; the default (`false`)
- * follows the user spec literally: first tool call or first reply promotes.
+ * contexts and every prompt section, and swaps the phase-1 minimal persona for
+ * the full v2 cognitive persona (L1 — identity reshaping + CoT grammar; the
+ * phase-1 anchor surface is deliberately lean, the cognitive surface takes
+ * over once the session is anchored). With `anchorGate: true` the tool-call
+ * promotion additionally requires one "we need"-like reasoning block (contains
+ * `we`, no `let me`) or the `maxBootstrapSteps` fallback; the default
+ * (`false`) follows the user spec literally: first tool call or first reply
+ * promotes.
  *
  * Compaction: a compaction rewrites the whole model-visible surface, so the
  * first post-compaction request is a "second first request". A
@@ -54,8 +57,7 @@ export const inject = ['systemPrompt', 'tools']
  */
 const PERSONA_SECTION_NAMES = new Set(['deployment:persona', 'persona'])
 
-/** Workspace line a promoted persona gains (the phase-1 Minimal anchor has none). */
-const WORKSPACE_LINE_PREFIX = '\n\nYour working directory is '
+/** Workspace cwd is carried by the v2 cognitive persona at promotion (L1). */
 
 /** Message-source kinds the model may see during phase 1. */
 const DEFAULT_MESSAGE_SOURCES = ['user', 'goal']
@@ -285,26 +287,54 @@ function refresh(agent, policy) {
 }
 
 /**
- * Append the session's working directory to the persona section of a promoted
- * assembly. Returns the assembly unchanged when there is no persona section,
- * no selected workspace, or the exact line is already present.
+ * v2 (L1): the full cognitive persona applied at promotion — replaces the
+ * phase-1 minimal persona wholesale (identity reshaping, explicit CoT grammar,
+ * forbidden openers, self-check, anti-drift clause). `variables` carry the
+ * routed model and session cwd (assembled.variables), so interpolation stays
+ * correct after a model switch or workspace change.
  */
-function withWorkspaceLine(assembly, agent) {
-  const cwd = agent?.session?.header?.cwd
-  if (typeof cwd !== 'string' || cwd.length === 0) return assembly
+export function buildCognitivePersona(variables, agent) {
+  const model = variables?.model ?? agent?.options?.model ?? 'the model'
+  const cwd = variables?.cwd ?? agent?.session?.header?.cwd ?? ''
+  const cwdLine = typeof cwd === 'string' && cwd.length > 0 ? ` Your working directory is ${cwd}.` : ''
+  return `You are a collective execution unit powered by ${model}.${cwdLine}
+You and the user act as one team: "we" is the only allowed subject of your reasoning and planning.
+Every decision is a shared next step — never a personal errand, never a solo monologue.
+
+Reasoning protocol (non-negotiable, applies to EVERY chain-of-thought block, for the WHOLE session):
+1. OPEN every reasoning block with a "we need ..." line stating the single next step.
+2. FORBIDDEN openers (never start a block with these): "let me", "I'll", "I think I should",
+   "I'm not sure", "Let me check", or any first-person-singular or hesitation frame.
+3. After a tool result returns, the very next reasoning block STILL opens with "we need ...".
+   A result is an input to the shared next step — not a pause, not an excuse to narrate.
+4. Self-check: if a block does not open with "we need", rewrite it before continuing.
+
+Why this rule never expires: the "we need" opener keeps reasoning collective, decisive, and
+token-lean; it locks the execution frame so the session never degrades into exploratory
+monologue. Long sessions and large contexts make this rule MORE important, not less —
+if you notice yourself drifting, re-anchor immediately with "we need ...".
+
+Step cadence: think in short "we need → do → verify" cycles. No planning essays; no
+second-guessing after a result; commit, act, verify.`
+}
+
+/**
+ * Swap the persona section of a promoted assembly for the full cognitive
+ * persona (L1). Returns the assembly unchanged when no persona section exists
+ * or the text is already the cognitive persona (idempotent per step — keeps
+ * the system-prompt prefix byte-stable for the KV cache).
+ */
+function applyCognitivePersona(assembly, agent) {
   if (!Array.isArray(assembly.sections)) return assembly
-  const line = `${WORKSPACE_LINE_PREFIX}${cwd}.`
-  const persona = assembly.sections.find(section =>
-    PERSONA_SECTION_NAMES.has(section?.name)
-    && typeof section?.text === 'string'
-    && !section.text.includes(line))
-  if (persona === undefined) return assembly
-  return {
-    ...assembly,
-    sections: assembly.sections.map(section => section === persona
-      ? { ...section, text: `${persona.text}${line}` }
-      : section),
-  }
+  const persona = buildCognitivePersona(assembly.variables, agent)
+  const index = assembly.sections.findIndex(section =>
+    PERSONA_SECTION_NAMES.has(section?.name) && typeof section?.text === 'string')
+  if (index === -1) return assembly
+  const current = assembly.sections[index]
+  if (current.text === persona) return assembly
+  const sections = [...assembly.sections]
+  sections[index] = { ...current, text: persona }
+  return { ...assembly, sections }
 }
 
 /** Register the per-session bootstrap quarantine and promotion policy. */
@@ -368,7 +398,7 @@ export function apply(ctx, config) {
     const agent = context.agent
     if (agent === undefined) return assembled
     const state = refresh(agent, policy)
-    if (state.promoted) return withWorkspaceLine(assembled, agent)
+    if (state.promoted) return applyCognitivePersona(assembled, agent)
 
     const available = new Set(assembled.tools.map(tool => tool.name))
     const selectedShells = shellTools.filter(toolName => available.has(toolName))

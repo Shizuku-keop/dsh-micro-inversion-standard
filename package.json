@@ -1,7 +1,7 @@
 {
   "name": "dsh-micro-inversion-standard",
-  "version": "1.0.0",
-  "description": "微逆标准模式 (Micro-Inversion Standard) — a two-phase, token-lean DSH agent preset that forces \"we need\" reasoning and slims context.",
+  "version": "2.0.0",
+  "description": "微逆标准模式 (Micro-Inversion Standard) — a token-lean DSH agent preset that forces \"we need\" reasoning across the whole session (cold-start bootstrap + global runtime anchors) and slims context.",
   "keywords": [
     "dsh",
     "agent-preset",
