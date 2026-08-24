@@ -291,7 +291,7 @@
 # over task completeness). Publishes no service; consumes only host-plane
 # services (`tools`).
 - id: anchor-sustainer
-  name: ./anchor-sustainer.mjs?v=2
+  name: ./anchor-sustainer.mjs?v=3
   config: {}
 
 # ── delegation and workflows ────────────────────────────────────────────────
@@ -378,5 +378,6 @@
   config:
     fetch: false
     searchTimeoutMs: 60000
+
 
 

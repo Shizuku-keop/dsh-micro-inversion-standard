@@ -132,26 +132,56 @@ function anchorMessage(text) {
 }
 
 const NEAR_ANCHOR_BASE =
-  '<system-reminder>\n[anchor] Open this next reasoning block with: we need ...\n</system-reminder>'
+  '<system-reminder>\n[we] open next block: we need ...\n</system-reminder>'
 const NEAR_ANCHOR_HARD =
-  '<system-reminder>\n[anchor] DRIFT DETECTED. Hard rule: this reasoning block MUST open with "we need ...". No "let me", no "I\'ll", no hesitation.\n</system-reminder>'
+  '<system-reminder>\n[we] DRIFT. Hard rule: this block MUST open "we need ...". No "let me", no "I\'ll".\n</system-reminder>'
 const RESULT_ANCHOR_BASE =
-  '<system-reminder>\n[anchor] Result received. Next reasoning block opens with: we need ...\n</system-reminder>'
+  '<system-reminder>\n[we] result in hand — next block: we need ...\n</system-reminder>'
 const RESULT_ANCHOR_HARD =
-  '<system-reminder>\n[anchor] Result received. DRIFT DETECTED. Hard rule: next reasoning block MUST open with "we need ...".\n</system-reminder>'
+  '<system-reminder>\n[we] result in hand — DRIFT. Hard rule: next block MUST open "we need ...".\n</system-reminder>'
 
 /** Re-assertion message on escalation, quoting the most recent violation. */
 function buildReassertion(state, level) {
   const quote = state.lastViolation.length > 0
     ? ` The last violation opened with: "${state.lastViolation}".`
     : ''
-  return `<system-reminder>\n[anchor] RE-ANCHOR (level ${level}): the reasoning opener "we need ..." is mandatory for every chain-of-thought block.${quote} Rewrite the next block with "we need ...".\n</system-reminder>`
+  return `<system-reminder>\n[we] RE-ANCHOR (level ${level}): the reasoning opener "we need ..." is mandatory.${quote} Rewrite the next block with "we need ...".\n</system-reminder>`
 }
 
+const DEFAULTS = {
+  // Keep only the newest N anchor messages in the request surface; older
+  // durable anchors stop being re-paid on every request (their text still
+  // lives in the log, it just no longer enters the surface).
+  maxAnchorsInSurface: 1,
+  // Tool-result continuations already carry the L3 result anchor; do not
+  // re-inject the L2 near-field anchor on those steps (redundant cost).
+  anchorAfterToolResult: false,
+}
+const CONFIG_KEYS = new Set(Object.keys(DEFAULTS))
+
 function resolveConfig(config = {}) {
-  const keys = Object.keys(config)
-  if (keys.length > 0) throw new Error(`${name}: unknown config key "${keys[0]}"`)
-  return Object.freeze({})
+  for (const key of Object.keys(config)) {
+    if (!CONFIG_KEYS.has(key)) throw new Error(`${name}: unknown config key "${key}"`)
+  }
+  const resolved = { ...DEFAULTS, ...config }
+  if (!Number.isInteger(resolved.maxAnchorsInSurface) || resolved.maxAnchorsInSurface < 0) {
+    throw new Error(`${name}: maxAnchorsInSurface must be a non-negative integer`)
+  }
+  if (typeof resolved.anchorAfterToolResult !== 'boolean') {
+    throw new Error(`${name}: anchorAfterToolResult must be a boolean`)
+  }
+  return Object.freeze(resolved)
+}
+
+const ANCHOR_KIND = 'micro-inversion-anchor'
+const isAnchor = (m) => m?.source?.kind === ANCHOR_KIND
+
+/** The last non-anchor message of a surface, or undefined. */
+function lastRealMessage(messages) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (!isAnchor(messages[i])) return messages[i]
+  }
+  return undefined
 }
 
 /**
@@ -160,11 +190,16 @@ function resolveConfig(config = {}) {
  * re-assertion — it NEVER triggers context trimming or output-budget caps, so
  * wording compliance can never take priority over task completeness. Context
  * management stays solely with context-slimmer (explicit pressure gate).
+ *
+ * v4 (cost fixes from the peak-valley real task): the request surface keeps a
+ * BOUNDED anchor tail (old durable anchors stop entering requests), and the L2
+ * near-field anchor is skipped on tool-result continuations (the L3 result
+ * anchor already covers that transition).
  */
 export function apply(ctx, config) {
-  resolveConfig(config ?? {})
+  const resolved = resolveConfig(config ?? {})
 
-  // ── L2: near-field anchor on every model request ─────────────────────────
+  // ── L2: near-field anchor on model requests ──────────────────────────────
   ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next()
     if (decision.kind !== 'enter') return decision
@@ -173,10 +208,22 @@ export function apply(ctx, config) {
     const info = levelFor(agent) ?? { state: null, level: 0 }
     let messages = decision.messages
 
+    // Bound the durable-anchor tail: drop oldest anchors from the surface.
+    const anchorIdx = []
+    messages.forEach((m, i) => { if (isAnchor(m)) anchorIdx.push(i) })
+    if (anchorIdx.length > resolved.maxAnchorsInSurface) {
+      const drop = new Set(anchorIdx.slice(0, anchorIdx.length - resolved.maxAnchorsInSurface))
+      messages = messages.filter((_, i) => !drop.has(i))
+    }
+
     // Re-assert once per escalation, quoting the recent violation.
     if (info.state !== null && info.level > info.state.assertedLevel) {
       messages = [...messages, anchorMessage(buildReassertion(info.state, info.level))]
       info.state.assertedLevel = info.level
+    }
+    // Tool-result continuation: L3 already anchored this transition — skip.
+    if (!resolved.anchorAfterToolResult && lastRealMessage(messages)?.source?.kind === 'tool') {
+      return { ...decision, messages }
     }
     // Near-field anchor last = nearest the generation point.
     const anchorText = info.level >= 1 ? NEAR_ANCHOR_HARD : NEAR_ANCHOR_BASE
