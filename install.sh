@@ -14,13 +14,17 @@ if [ ! -d "$SRC" ]; then
   exit 1
 fi
 
+# v5: transactional install — copy into a staging dir first, then swap, so
+# an interrupted copy never leaves a half-installed preset behind.
+STAGE="$DST.tmp"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+cp -R "$SRC/." "$STAGE/"
 if [ -d "$DST" ] || [ -e "$DST" ]; then
   echo "Overwriting existing preset at: $DST"
   rm -rf "$DST"
 fi
-
-mkdir -p "$(dirname "$DST")"
-cp -R "$SRC" "$DST"
+mv "$STAGE" "$DST"
 
 echo
 echo "Installed: $DST"

@@ -1,7 +1,7 @@
 {
   "name": "dsh-micro-inversion-standard",
-  "version": "2.0.0",
-  "description": "微逆标准模式 (Micro-Inversion Standard) — a token-lean DSH agent preset that forces \"we need\" reasoning across the whole session (cold-start bootstrap + global runtime anchors) and slims context.",
+  "version": "2.2.0",
+  "description": "微逆标准模式 (Micro-Inversion Standard) — a token-lean DSH agent preset that forces \"we need\" reasoning (bilingual EN/ZH) and slims context.",
   "keywords": [
     "dsh",
     "agent-preset",
@@ -14,6 +14,7 @@
   "type": "module",
   "files": [
     "preset",
+    "test",
     "install.ps1",
     "install.sh",
     "README.md",
@@ -25,6 +26,7 @@
     "url": "git+https://github.com/Shizuku-keop/dsh-micro-inversion-standard.git"
   },
   "scripts": {
+    "test": "node --test",
     "install:win": "powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1",
     "install:posix": "sh install.sh"
   }

@@ -17,13 +17,17 @@ if (-not (Test-Path $src)) {
   exit 1
 }
 
+# v5: transactional install — copy into a staging dir first, then swap, so
+# an interrupted copy never leaves a half-installed preset behind.
+$tmp = Join-Path $DshHome '.agent-presetsmicro-inversion-standard.tmp'
+if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Copy-Item -Path (Join-Path $src '*') -Destination $tmp -Recurse -Force
 if (Test-Path $dst) {
   Write-Host "Overwriting existing preset at: $dst"
   Remove-Item -Recurse -Force $dst
 }
-
-New-Item -ItemType Directory -Force -Path $dst | Out-Null
-Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force
+Move-Item -Path $tmp -Destination $dst
 
 Write-Host ''
 Write-Host "Installed: $dst"

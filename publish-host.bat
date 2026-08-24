@@ -18,17 +18,17 @@ git remote remove origin 2>nul
 git remote add origin %REPO%
 git branch -M main
 echo.
-echo   Step 2: push main branch + tag v1.0.0
+echo   Step 2: push main branch + tag v2.2.0
 echo     (the first push opens a browser window to sign in to GitHub)
 git push -u origin main
 if errorlevel 1 goto :err
-git push --force origin v1.0.0
+git push --force origin v2.2.0
 if errorlevel 1 goto :err
 echo.
 echo ============================================================
 echo   PUBLISHED OK. On github.com, open the repo page then:
-echo     Releases  -^>  Create a new release  -^>  tag v1.0.0
-echo     upload dist\dsh-micro-inversion-standard-v1.0.0.zip
+echo     Releases  -^>  Create a new release  -^>  tag v2.2.0
+echo     upload dist\dsh-micro-inversion-standard-v2.2.0.zip
 echo ============================================================
 pause
 exit /b 0

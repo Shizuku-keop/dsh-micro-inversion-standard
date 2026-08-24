@@ -10,6 +10,14 @@
 # anchor on every request, L3 result anchor after every tool result, and a D
 # drift-detection/re-anchoring loop. See docs/v2-global-micro-inversion.md.
 #
+# rev 4 (v5 hardening): bilingual EN/ZH opener detection; post-compaction
+# requests keep the full output budget; user-set maxTokens respected; the
+# one-time instruction hint keeps later injections visible; untagged phase-1
+# messages are kept; result markers are fit to the threshold dynamically;
+# unknown config keys warn instead of failing the mount; drift-level
+# transitions are logged. New knobs: postCompactionMaxTokens,
+# dropProtectedUnderPressure. ?v= stamps bumped (7/5/4).
+#
 # Phase 1 (Bootstrap anchor) — before the first durable tool call or the first
 # substantive reply:
 #   - model-visible tools: exactly the Minimal preset pair — one persistent
@@ -66,6 +74,10 @@
 # `buildCognitivePersona` in tool-bootstrap.mjs) while restoring every other
 # section. The "we need" protocol is present in both versions, so it stays
 # active for the WHOLE session.
+#
+# 中文变体（可选）：把下方 reasoning protocol 中的 "we need" 换成 "我们需要"、
+# "never with let me" 换成 "never with 让我/我想"；检测器（tool-bootstrap.mjs
+# classifyReasoning / anchor-sustainer.mjs classifyOpener）已同时支持中英文起手词。
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
@@ -80,7 +92,7 @@
 # tool/call or the first substantive reply promotes the session to the full
 # Standard catalog (see tool-bootstrap.mjs).
 - id: tool-bootstrap
-  name: ./tool-bootstrap.mjs?v=6
+  name: ./tool-bootstrap.mjs?v=7
   config:
     shellTools: [bash, pwsh]
     commonTools: [str_replace_editor]
@@ -89,6 +101,10 @@
     maxBootstrapSteps: 4
     promoteAfterFirstResponse: true
     bootstrapMaxTokens: 1024
+    # v5: output budget for the post-compaction CONTROLLED phase. A compaction
+    # returns a warm session to the 2-tool surface; the cold-start 1024 cap is
+    # NOT re-applied there (default: full budget). Set e.g. 8192 to cap it.
+    # postCompactionMaxTokens: 8192
     compactionTools: []
     deferredSources: [agent-instructions, skill-catalog]
     deferredGraceSteps: 1
@@ -277,8 +293,9 @@
 # `llm`), so it sits loose like `tool-jobs`. The `?v=N` query busts the Node
 # ESM module cache so an edited plugin actually reloads on re-mount.
 - id: context-slimmer
-  name: ./context-slimmer.mjs?v=4
-  config: {}
+  name: ./context-slimmer.mjs?v=5
+  config:
+    # dropProtectedUnderPressure: false   # v5 last resort: at high pressure, drop even an all-protected middle (marker says so)
 
 # ── global runtime anchors (v2) ─────────────────────────────────────────────
 
@@ -291,8 +308,10 @@
 # over task completeness). Publishes no service; consumes only host-plane
 # services (`tools`).
 - id: anchor-sustainer
-  name: ./anchor-sustainer.mjs?v=3
+  name: ./anchor-sustainer.mjs?v=4
   config: {}
+  # v5: bilingual EN/ZH opener detection is built in; drift-level transitions
+  # are logged to the session log.
 
 # ── delegation and workflows ────────────────────────────────────────────────
 
@@ -372,7 +391,9 @@
     allowParallelInProgress: true
 
 # The `web` service and its search provider stay in the host composition; only
-# the model-facing tool is per-session.
+# the model-facing tool is per-session. `fetch: false` is deliberate (token-
+# lean preset: search only, no URL fetching). Flip to true if tasks need the
+# model to fetch web pages.
 - id: tool-web
   name: '@deepseek-ai/dsh-tool-web'
   config:

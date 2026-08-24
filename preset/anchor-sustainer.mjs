@@ -16,11 +16,11 @@
  * D  — Drift detection & re-anchoring: scans `session.events` incrementally
  *      (NEVER `session/event` — dsh-scope filters that event out of
  *      agent-plane presets, verified empirically) and classifies the opener of
- *      every reasoning block. Violations escalate the anchor wording, inject
- *      a re-assertion message, and at level >= 2 tighten the output budget and
- *      (when pressure allows) early-trim the middle of the request surface to
- *      restore head/tail salience. Recovery (>=3 consecutive conforming
- *      blocks) de-escalates.
+ *      every reasoning block (bilingual EN/ZH). Violations escalate ONLY the
+ *      anchor wording and inject a re-assertion message — style drift never
+ *      triggers context trimming or output-budget caps (v3; wording
+ *      compliance must never take priority over task completeness). Recovery
+ *      (>=3 consecutive conforming blocks) de-escalates.
  *
  * Composes with `tool-bootstrap.mjs` (phase-1 whitelist filter) and
  * `context-slimmer.mjs` (80% pressure trim + spill): both register prepend
@@ -35,8 +35,10 @@ export const name = 'micro-inversion-anchor-sustainer'
 export const inject = ['tools']
 
 /** Opener classifier: conforming collective frames vs forbidden exploratory frames. */
-const CONFORM_RE = /^\s*(we\s+need|we'?ve|we'?ll|we\s+can|we\s+should|we\s+must|next,?\s+we)/i
-const VIOLATION_RE = /^\s*(let\s+me|i'?ll|i\s+(think|should|need|want|am|'m|guess)|let'?s|maybe\s+i|i\s+want)/i
+// v5: bilingual — English and Chinese collective frames conform, English and
+// Chinese first-person/exploratory frames violate (中文思维链检测).
+const CONFORM_RE = /^\s*(we\s+need|we'?ve|we'?ll|we\s+can|we\s+should|we\s+must|next,?\s+we|我们(需要|可以|应该|必须|要|先|再|得|一起|来)|让我们)/i
+const VIOLATION_RE = /^\s*(let\s+me|i'?ll|i\s+(think|should|need|want|am|'m|guess)|let'?s|maybe\s+i|i\s+want|让我(?!们)|我来|我想|我认为|我觉得|我猜|我打算|我准备|我需要)/i
 
 /** Classify one reasoning block's opener: 'conform' | 'violation' | 'soft'. */
 export function classifyOpener(text) {
@@ -72,6 +74,7 @@ function stateFor(session) {
       conformStreak: 0,
       assertedLevel: 0,
       lastViolation: '',
+      lastLoggedLevel: 0,
     }
     stateBySession.set(session, state)
   }
@@ -82,7 +85,7 @@ function stateFor(session) {
  * the FIRST reasoning block of each message (the frame-setter). Later blocks
  * are continuations and do NOT escalate — style policing must never punish
  * legitimate follow-through. */
-function scanAndClassify(state, session) {
+export function scanAndClassify(state, session) {
   const events = session.events ?? []
   for (; state.next < events.length; state.next += 1) {
     const event = events[state.next]
@@ -159,9 +162,10 @@ const DEFAULTS = {
 }
 const CONFIG_KEYS = new Set(Object.keys(DEFAULTS))
 
-function resolveConfig(config = {}) {
+export function resolveConfig(config = {}, logger) {
+  const log = typeof logger?.warn === 'function' ? logger : console
   for (const key of Object.keys(config)) {
-    if (!CONFIG_KEYS.has(key)) throw new Error(`${name}: unknown config key "${key}"`)
+    if (!CONFIG_KEYS.has(key)) log.warn(`${name}: ignoring unknown config key "${key}"`)
   }
   const resolved = { ...DEFAULTS, ...config }
   if (!Number.isInteger(resolved.maxAnchorsInSurface) || resolved.maxAnchorsInSurface < 0) {
@@ -197,7 +201,7 @@ function lastRealMessage(messages) {
  * anchor already covers that transition).
  */
 export function apply(ctx, config) {
-  const resolved = resolveConfig(config ?? {})
+  const resolved = resolveConfig(config ?? {}, ctx.logger)
 
   // ── L2: near-field anchor on model requests ──────────────────────────────
   ctx.on('agent/pre-step', async (payload, next) => {
@@ -206,6 +210,20 @@ export function apply(ctx, config) {
     const agent = payload.agent
     if (agent === undefined || payload.signal?.aborted) return decision
     const info = levelFor(agent) ?? { state: null, level: 0 }
+    // v5 observability: log drift-level transitions so the loop is traceable
+    // without a dev tool (in-memory counters are not otherwise queryable).
+    if (info.state !== null && info.level !== info.state.lastLoggedLevel) {
+      info.state.lastLoggedLevel = info.level
+      try {
+        ctx.logger.info(
+          `${name}: drift level ${info.level} `
+          + `(violations=${info.state.violations}, consecutive=${info.state.consecutive}, `
+          + `lastViolation=${JSON.stringify(info.state.lastViolation)})`,
+        )
+      } catch {
+        // Logger unavailable — best-effort only.
+      }
+    }
     let messages = decision.messages
 
     // Bound the durable-anchor tail: drop oldest anchors from the surface.

@@ -42,6 +42,13 @@
  * Adapted from the `liangshen` preset's `tool-bootstrap.mjs` (itself derived
  * from https://github.com/xiaobright/dsh-anchored-standard, MIT), minus the
  * PTC-Mode code-presentation machinery.
+ *
+ * v5 hardening: bilingual (EN/ZH) opener detection; post-compaction requests
+ * keep the full output budget (no cold-start cap on warm sessions); user-set
+ * maxTokens budgets are respected (only larger defaults are capped); the
+ * one-time instruction hint no longer suppresses later instruction
+ * injections; phase-1 keeps untagged messages instead of silently dropping
+ * them.
  */
 
 /** Cordis plugin name used by loader diagnostics. */
@@ -112,9 +119,15 @@ export function classifyReasoning(text) {
   const trimmed = String(text ?? '').trim()
   const we = countWord(trimmed, /\bwe\b/gi)
   const letMe = countWord(trimmed, /\blet me\b/gi)
-  const metrics = { we, letMe }
-  if (we > 0 && letMe === 0) return { label: 'minimal-like', score: 4, metrics }
-  if (letMe > 0) return { label: 'standard-like', score: -4, metrics }
+  // v5: bilingual — Chinese collective openers count as anchored and Chinese
+  // first-person/exploratory openers count as drift (中文思维链检测).
+  const weZh = countWord(trimmed, /我们(需要|可以|应该|必须|要|先|再|得|一起|来)|让我们/g)
+  const letMeZh = countWord(trimmed, /让我(?!们)|我来|我想|我认为|我觉得|我猜|我打算|我准备|我需要/g)
+  const metrics = { we, letMe, weZh, letMeZh }
+  const collective = we + weZh
+  const drift = letMe + letMeZh
+  if (collective > 0 && drift === 0) return { label: 'minimal-like', score: 4, metrics }
+  if (drift > 0) return { label: 'standard-like', score: -4, metrics }
   return { label: 'ambiguous', score: 0, metrics }
 }
 
@@ -126,9 +139,14 @@ export function hasAnchoredReasoning(content) {
 }
 
 /** Whether one pre-step message belongs to a whitelisted source kind. */
-function isAllowedMessage(message, allowedSources) {
+export function isAllowedMessage(message, allowedSources) {
   const kind = message.source?.kind
-  return kind !== undefined && allowedSources.has(kind)
+  if (kind === undefined) {
+    // v5: an untagged message cannot be classified — keep it rather than
+    // silently dropping real content (the phase-1 filter warns once below).
+    return true
+  }
+  return allowedSources.has(kind)
 }
 
 /** Whether one pre-step message belongs to a deferred injection kind. */
@@ -138,7 +156,7 @@ function isDeferredMessage(message, deferredSources) {
 }
 
 /** Extract the reference file list one agent-instructions message renders. */
-function extractInstructionPaths(message) {
+export function extractInstructionPaths(message) {
   const paths = []
   const blocks = Array.isArray(message?.content) ? message.content : []
   for (const block of blocks) {
@@ -174,14 +192,20 @@ function buildInstructionHint(original, paths) {
 }
 
 /** Swap full-text agent-instructions injections for the one-time hint. */
-function instructionHintMessages(messages, state) {
+export function instructionHintMessages(messages, state) {
   const kept = []
   for (const message of messages) {
     if (message?.source?.kind !== 'agent-instructions') {
       kept.push(message)
       continue
     }
-    if (state.instructionHinted) continue
+    if (state.instructionHinted) {
+      // v5: after the one-time hint, later instruction injections stay
+      // visible in full — instruction currency must not be traded away (a
+      // mid-session instruction update would otherwise never reach the model).
+      kept.push(message)
+      continue
+    }
     const paths = extractInstructionPaths(message)
     if (paths.length === 0) {
       kept.push(message)
@@ -225,7 +249,7 @@ function stateFor(session) {
  * durable `next` scan pointer is kept, so events recorded BEFORE the boundary
  * never re-promote; a NEW tool/call or assistant message past it does.
  */
-function resetToControlled(state) {
+export function resetToControlled(state) {
   state.promoted = false
   state.toolCalled = false
   state.responded = false
@@ -244,7 +268,7 @@ function resetToControlled(state) {
  *    `promoteAfterFirstResponse` is set — release on the new user turn;
  * d) tool-less first response with `promoteAfterFirstResponse` — promote.
  */
-function decidePromotion(state, config) {
+export function decidePromotion(state, config) {
   if (state.toolCalled && config.anchorGate !== true) return true
   if (state.toolCalled && config.anchorGate === true && (state.anchored || state.steps >= config.maxBootstrapSteps)) return true
   if (state.toolCalled && config.anchorGate === true && config.promoteAfterFirstResponse === true && state.turnEnded) return true
@@ -253,7 +277,7 @@ function decidePromotion(state, config) {
 }
 
 /** Scan newly appended session events and update promotion state. */
-function scanEvents(state, session) {
+export function scanEvents(state, session) {
   const events = session.events
   for (; state.next < events.length; state.next += 1) {
     const event = events[state.next]
@@ -370,6 +394,12 @@ export function apply(ctx, config) {
   const bootstrapMaxTokens = config.bootstrapMaxTokens === undefined
     ? undefined
     : integerAtLeast(config.bootstrapMaxTokens, 'bootstrapMaxTokens', 1)
+  // v5: budget for the post-compaction CONTROLLED phase. A compaction returns
+  // a warm session to the 2-tool surface; re-applying the cold-start 1024 cap
+  // there truncates mid-task replies. Default (undefined) = no cap.
+  const postCompactionMaxTokens = config.postCompactionMaxTokens === undefined
+    ? undefined
+    : integerAtLeast(config.postCompactionMaxTokens, 'postCompactionMaxTokens', 1)
   // Core work set exposed during the post-compaction controlled phase.
   const compactionTools = stringListOrEmpty(config.compactionTools, 'compactionTools')
   // Opt-in extra line for the phase-1 persona (test builds).
@@ -381,6 +411,7 @@ export function apply(ctx, config) {
     deferredGraceSteps: integerAtLeast(config.deferredGraceSteps ?? 0, 'deferredGraceSteps', 0),
     instructionHint: config.instructionHint === true,
     bootstrapMaxTokens,
+    postCompactionMaxTokens,
     compactionTools,
     phase1FirstCallInstruction,
   }
@@ -457,10 +488,14 @@ export function apply(ctx, config) {
     if (state === undefined) return decision
 
     if (!state.promoted) {
-      return {
-        ...decision,
-        messages: decision.messages.filter(message => isAllowedMessage(message, messageSources)),
+      const messages = decision.messages.filter(message => isAllowedMessage(message, messageSources))
+      if (messages.length !== decision.messages.length) {
+        warnOnce(
+          `${name}: phase-1 message whitelist dropped ${decision.messages.length - messages.length} message(s) `
+          + `(allowed source kinds: ${[...messageSources].join(', ')}). Messages without source.kind are kept.`,
+        )
       }
+      return { ...decision, messages }
     }
     let result = decision
     if (state.deferredSteps < policy.deferredGraceSteps) {
@@ -482,14 +517,27 @@ export function apply(ctx, config) {
   ctx.on('agent/request', async (payload, next) => {
     const resolved = await next()
     const agent = payload?.agent
-    if (agent === undefined || policy.bootstrapMaxTokens === undefined) return resolved
+    if (agent === undefined) return resolved
     const state = refresh(agent, policy)
     if (state.promoted) {
-      if (resolved.maxTokens !== policy.bootstrapMaxTokens) return resolved
-      const rest = { ...resolved }
-      delete rest.maxTokens
-      return rest
+      // Strip only a budget THIS plugin set (identity check) — never a
+      // user-set or downstream budget.
+      const setCaps = [policy.bootstrapMaxTokens, policy.postCompactionMaxTokens]
+        .filter(value => value !== undefined)
+      if (setCaps.includes(resolved.maxTokens)) {
+        const rest = { ...resolved }
+        delete rest.maxTokens
+        return rest
+      }
+      return resolved
     }
-    return { ...resolved, maxTokens: policy.bootstrapMaxTokens }
+    // v5: after a compaction the session is warm — apply the wider
+    // post-compaction budget (default: no cap) instead of the cold-start cap.
+    const cap = state.hasCompacted ? policy.postCompactionMaxTokens : policy.bootstrapMaxTokens
+    if (cap === undefined) return resolved
+    // Respect an explicitly smaller user-set budget; only ever LOWER a larger
+    // (or default) budget down to the cap — never raise one.
+    if (typeof resolved.maxTokens === 'number' && resolved.maxTokens <= cap) return resolved
+    return { ...resolved, maxTokens: cap }
   }, { prepend: true })
 }

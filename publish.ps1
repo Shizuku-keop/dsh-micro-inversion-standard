@@ -23,8 +23,8 @@ param(
   [Parameter(Mandatory = $true)][string]$Token,
   [string]$RepoName = 'dsh-micro-inversion-standard',
   [ValidateSet('public', 'private')][string]$Visibility = 'public',
-  [string]$Tag = 'v1.0.0',
-  [string]$Description = '微逆标准模式 (Micro-Inversion Standard) — a two-phase, token-lean DSH agent preset that forces "we need" reasoning and slims context.',
+  [string]$Tag = 'v2.2.0',
+  [string]$Description = '微逆标准模式 (Micro-Inversion Standard) — a token-lean DSH agent preset that forces "we need" reasoning (bilingual EN/ZH) and slims context.',
   [switch]$SkipCreate,
   [switch]$SkipRelease
 )
@@ -69,6 +69,7 @@ git remote add origin $authOrigin
 git branch -M main
 git push -u origin main
 git tag -f $Tag
+# NOTE: --force overwrites a remote tag of the same name (intended for republish).
 git push --force origin $Tag
 
 Write-Host "== 4/5 clean origin (drop token) =="
@@ -79,7 +80,7 @@ if (-not $SkipRelease) {
   $releaseBody = @{
     tag_name = $Tag
     name     = $Tag
-    body     = "See README.md for install & usage.`n`nRelease asset: dsh-micro-inversion-standard-$Tag.zip (extract and run install.ps1 / install.sh)."
+    body     = "See README.md for install & usage.`n`nRelease asset: dsh-micro-inversion-standard-$Tag.zip (extract and run install.ps1 / install.sh).`n`nCurrent preset version: 2.2.0 (v5 hardening: bilingual EN/ZH detection, post-compaction budget, transactional install, 33 automated tests)."
   } | ConvertTo-Json
   $release = Invoke-RestMethod -Uri "$api/repos/$owner/$RepoName/releases" -Headers $headers -Method Post -ContentType 'application/json' -Body $releaseBody
 

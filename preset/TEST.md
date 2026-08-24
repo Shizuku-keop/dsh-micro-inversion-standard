@@ -122,15 +122,18 @@ micro-inversion 裁剪标记原文、以及标记里给出的完整结果保存�
 - **L1 换装**：晋升后任意 `request/header.system` 含 `collective execution unit`
   与 `FORBIDDEN openers`（阶段一不含，晋升后含）；
 - **L2 近场锚**：日志中存在 `user/message` 事件，`source.kind ===
-  'micro-inversion-anchor'` 且文本含 `Open this next reasoning block`；
-- **L3 结果锚**：工具调用后存在同样 source.kind、文本含 `Result received` 的
-  `user/message` 事件；
+  'micro-inversion-anchor'` 且文本含 `open next block`；
+- **L3 结果锚**：工具调用后存在同样 source.kind、文本含 `result in hand` 的
+  `user/message` 事件（经 additionalContexts 带入下一请求）；
 - **D 漂移检测**（代码层已验证，会话层需要长会话触发）：推理块起手词持续
-  违规 ≥3 次后，日志出现升级版锚文本（含 `DRIFT DETECTED`）与重述消息。
+  违规 ≥3 次后，日志出现升级版锚文本（含 `[we] DRIFT.` 或 `RE-ANCHOR`）与
+  重述消息；v5 起起手词检测支持中英文。
 
 判定：前四项全中即 v2 通过。
 
 ## 快速验收（30 秒版）
+
+> 自动化：仓库根目录 `npm test`（test/，33 项：晋升状态机 / 裁剪切分 / 漂移扫描 / 双语分类 / v5 新行为）。
 
 1. 新会话发送 `请用 pwsh 运行 Get-Location`；
 2. 看第一条请求的工具清单是否为 2 个、推理是否以 "we need" 开头；

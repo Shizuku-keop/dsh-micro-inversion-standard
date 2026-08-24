@@ -53,6 +53,10 @@ const DEFAULTS = {
   spillResults: true,
   spillTrimmedSurface: false,
   skipTools: [],
+  // v5: last resort — when the middle holds ONLY protected messages at high
+  // pressure, still drop them (the marker says so). Default false keeps the
+  // safety guarantee: protected content is never removed silently.
+  dropProtectedUnderPressure: false,
 }
 
 const CONFIG_KEYS = new Set(Object.keys(DEFAULTS))
@@ -114,9 +118,14 @@ function stringList(value, field) {
 }
 
 /** Resolve and validate configuration. */
-export function resolveConfig(config = {}) {
+export function resolveConfig(config = {}, logger) {
+  const log = typeof logger?.warn === 'function' ? logger : console
   for (const key of Object.keys(config)) {
-    if (!CONFIG_KEYS.has(key)) throw new Error(`${name}: unknown config key "${key}"`)
+    if (!CONFIG_KEYS.has(key)) {
+      // v5: a config typo must not break the whole preset mount — warn and
+      // ignore unknown keys instead of throwing.
+      log.warn(`${name}: ignoring unknown config key "${key}"`)
+    }
   }
   const resolved = { ...DEFAULTS, ...config }
   resolved.resultTrimThresholdChars = positiveInteger(resolved.resultTrimThresholdChars, 'resultTrimThresholdChars')
@@ -124,8 +133,8 @@ export function resolveConfig(config = {}) {
   resolved.resultTailChars = nonNegativeInteger(resolved.resultTailChars, 'resultTailChars')
   resolved.surfaceHeadChars = nonNegativeInteger(resolved.surfaceHeadChars, 'surfaceHeadChars')
   resolved.surfaceTailChars = nonNegativeInteger(resolved.surfaceTailChars, 'surfaceTailChars')
-  if (resolved.resultHeadChars + RESULT_MARKER.length + resolved.resultTailChars > resolved.resultTrimThresholdChars) {
-    throw new Error(`${name}: resultHeadChars + marker + resultTailChars must be at most resultTrimThresholdChars`)
+  if (resolved.resultTrimThresholdChars < 16) {
+    throw new Error(`${name}: resultTrimThresholdChars must be at least 16 (marker needs room)`)
   }
   if (typeof resolved.pressureRatio !== 'number' || resolved.pressureRatio <= 0 || resolved.pressureRatio >= 1) {
     throw new Error(`${name}: pressureRatio must be in (0, 1)`)
@@ -133,6 +142,7 @@ export function resolveConfig(config = {}) {
   resolved.spillResults = booleanFlag(resolved.spillResults, 'spillResults')
   resolved.spillTrimmedSurface = booleanFlag(resolved.spillTrimmedSurface, 'spillTrimmedSurface')
   resolved.skipTools = stringList(resolved.skipTools, 'skipTools')
+  resolved.dropProtectedUnderPressure = booleanFlag(resolved.dropProtectedUnderPressure, 'dropProtectedUnderPressure')
   return Object.freeze(resolved)
 }
 
@@ -216,12 +226,21 @@ function isProtected(message) {
  * Returns `null` when the middle holds nothing trimable (nothing safe to
  * remove — high pressure alone must never destroy protected content).
  */
-export function splitTrimable(messages, headChars, tailChars) {
+export function splitTrimable(messages, headChars, tailChars, options = {}) {
+  const dropProtected = options.dropProtected === true
   const base = splitSurface(messages, headChars, tailChars)
   if (base === null) return null
-  const keptMiddle = base.middle.filter(isProtected)
-  const trimable = base.middle.filter(message => !isProtected(message))
-  if (trimable.length === 0) return null
+  let keptMiddle = base.middle.filter(isProtected)
+  let trimable = base.middle.filter(message => !isProtected(message))
+  let droppedProtected = false
+  if (trimable.length === 0) {
+    if (!dropProtected) return null
+    // v5 last resort: the middle is ALL protected and pressure is high —
+    // drop it anyway; the marker explicitly says protected content went.
+    trimable = keptMiddle
+    keptMiddle = []
+    droppedProtected = true
+  }
   const droppedChars = trimable.reduce((sum, message) => sum + measureMessageChars(message), 0)
   return {
     head: base.head,
@@ -229,6 +248,30 @@ export function splitTrimable(messages, headChars, tailChars) {
     trimable,
     tail: base.tail,
     droppedChars,
+    droppedProtected,
+  }
+}
+
+/**
+ * v5: fit head + marker + tail inside the byte threshold when the real
+ * marker (with its locator notice) is longer than the fixed RESULT_MARKER
+ * constant. Shrinks head first, then tail; returns null when even a bare
+ * marker cannot fit (the caller then leaves the result untrimmed).
+ */
+export function fitTrim(text, headChars, tailChars, marker, threshold) {
+  const markerLen = codePointLength(marker)
+  const available = threshold - markerLen
+  if (available < 8) return null
+  const head = Math.min(headChars, available - 1)
+  const tail = Math.min(tailChars, available - head)
+  const points = Array.from(text)
+  return {
+    head: points.slice(0, head).join(''),
+    tail: points.slice(points.length - tail).join(''),
+    headChars: head,
+    tailChars: tail,
+    markerLen,
+    totalChars: head + tail + markerLen,
   }
 }
 
@@ -237,7 +280,7 @@ export function splitTrimable(messages, headChars, tailChars) {
  * ENUMERATES what was trimmed (kinds + tool call ids) so the model knows the
  * content exists and can recover it on demand.
  */
-function buildSurfaceMarker(split, droppedChars, percent) {
+export function buildSurfaceMarker(split, droppedChars, percent) {
   const start = split.head.length
   const end = start + split.keptMiddle.length + split.trimable.length - 1
   const byKind = {}
@@ -252,13 +295,16 @@ function buildSurfaceMarker(split, droppedChars, percent) {
   const toolNote = toolIds.length > 0
     ? ` Trimmed tool calls: ${toolIds.slice(0, 12).join(', ')}${toolIds.length > 12 ? '…' : ''}.`
     : ''
+  const protectedNote = split.droppedProtected === true
+    ? ' LAST-RESORT DROP: the middle held ONLY protected content (user/approval/goal/analysis) and dropProtectedUnderPressure is enabled — protected messages were dropped this once; the durable log still keeps them.'
+    : ' User messages, approvals, goal rounds, and model analysis were NEVER trimmed.'
   return {
     id: globalThis.crypto.randomUUID(),
     role: 'user',
     content: [{
       type: 'text',
       text: '<system-reminder>\n'
-        + `[micro-inversion: context pressure reached ${percent}% of the model window. Trimmed middle span (messages ${start}..${end}, ~${droppedChars} chars) — ${kinds}.${toolNote} User messages, approvals, goal rounds, and model analysis were NEVER trimmed. The durable session log keeps everything; if any trimmed tool call was a failure record or is needed for the task, re-run or re-read it. /compact produces a durable summary.]`
+        + `[micro-inversion: context pressure reached ${percent}% of the model window. Trimmed middle span (messages ${start}..${end}, ~${droppedChars} chars) — ${kinds}.${toolNote}${protectedNote} The durable session log keeps everything; if any trimmed tool call was a failure record or is needed for the task, re-run or re-read it. /compact produces a durable summary.]`
         + '\n</system-reminder>',
     }],
     source: { kind: 'micro-inversion-trim', plugin: name },
@@ -267,7 +313,7 @@ function buildSurfaceMarker(split, droppedChars, percent) {
 
 /** Register the two context-slimming hooks. */
 export function apply(ctx, config) {
-  const resolved = resolveConfig(config ?? {})
+  const resolved = resolveConfig(config ?? {}, ctx.logger)
 
   // ── Hook 1: tools/post-execute — trim oversized results, spill the full text.
   ctx.on('tools/post-execute', async (exec, result, next) => {
@@ -315,11 +361,14 @@ export function apply(ctx, config) {
     }
     if (exec.signal?.aborted) return decision
 
-    const points = Array.from(text)
-    const head = points.slice(0, resolved.resultHeadChars).join('')
-    const tail = points.slice(points.length - resolved.resultTailChars).join('')
-    const marker = `${RESULT_MARKER} from ${total} to ${resolved.resultHeadChars + resolved.resultTailChars} chars (head ${resolved.resultHeadChars} / tail ${resolved.resultTailChars}).${notice} ...]\n\n`
-    return { kind: 'accept', content: [{ type: 'text', text: head + marker + tail }] }
+    // v5: fit the projection inside the threshold with the REAL marker
+    // length (the locator notice can be long) — shrink head/tail as needed
+    // instead of overshooting the budget.
+    const planned = `${RESULT_MARKER} from ${total} to ${resolved.resultHeadChars + resolved.resultTailChars} chars (head ${resolved.resultHeadChars} / tail ${resolved.resultTailChars}).${notice} ...]\n\n`
+    const fit = fitTrim(text, resolved.resultHeadChars, resolved.resultTailChars, planned, resolved.resultTrimThresholdChars)
+    if (fit === null) return decision // marker alone cannot fit — leave untrimmed
+    const marker = `${RESULT_MARKER} from ${total} to ${fit.headChars + fit.tailChars} chars (head ${fit.headChars} / tail ${fit.tailChars}).${notice} ...]\n\n`
+    return { kind: 'accept', content: [{ type: 'text', text: fit.head + marker + fit.tail }] }
   }, { prepend: true })
 
   // ── Hook 2: agent/pre-step — at pressureRatio of the window, DROP only
@@ -366,7 +415,9 @@ export function apply(ctx, config) {
     if (!over) return decision
     if (signal?.aborted) return decision
 
-    const split = splitTrimable(messages, resolved.surfaceHeadChars, resolved.surfaceTailChars)
+    const split = splitTrimable(messages, resolved.surfaceHeadChars, resolved.surfaceTailChars, {
+      dropProtected: resolved.dropProtectedUnderPressure,
+    })
     if (split === null) return decision
 
     const marker = buildSurfaceMarker(split, split.droppedChars, percent)

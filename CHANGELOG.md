@@ -1,3 +1,71 @@
+# 2.2.0 (2026-08-25) — v5 hardening + v3/v4 backfill
+
+This release records the previously-unlogged v3/v4 work and adds the v5
+hardening pass. The dist zip is rebuilt as `dsh-micro-inversion-standard-v2.2.0.zip`.
+
+## v5 — hardening fixes (this release)
+
+- **Bilingual opener detection (EN/ZH)**: `classifyReasoning` (tool-bootstrap)
+  and `classifyOpener` (anchor-sustainer) now recognise Chinese collective
+  openers (`我们需要 / 我们来 / 让我们`) and Chinese first-person openers
+  (`让我 / 我想 / 我认为` …). The drift loop no longer goes blind when the
+  model reasons in Chinese.
+- **Instruction hint no longer swallows instructions**: the one-time hint still
+  replaces the first `agent-instructions` dump, but LATER injections stay
+  visible in full — a mid-session instruction update reaches the model again.
+- **Post-compaction output budget**: after `compaction/end` the warm session
+  keeps the FULL output budget (new knob `postCompactionMaxTokens`, default
+  none) instead of re-applying the cold-start 1024 cap to mid-task replies.
+- **Respect user-set maxTokens**: the bootstrap cap only ever LOWERS a larger
+  (or default) budget; an explicitly smaller user budget is preserved. The
+  promoted-side strip is identity-checked against both caps this plugin sets.
+- **Phase-1 message whitelist is non-destructive**: messages without a
+  `source.kind` tag are kept (was: silently dropped); a one-time warning is
+  logged when the whitelist drops anything.
+- **Result markers fit the threshold**: `fitTrim` sizes head/tail against the
+  REAL marker length (locator notice included), so a long path never pushes the
+  trimmed result over `resultTrimThresholdChars`.
+- **Config typos cannot break the mount**: unknown config keys now warn and are
+  ignored (both `context-slimmer` and `anchor-sustainer`); type/range errors
+  still throw.
+- **Last-resort pressure trim**: new knob `dropProtectedUnderPressure`
+  (default false) — at high pressure, drop even an all-protected middle, with
+  the marker explicitly saying protected content went.
+- **Drift observability**: drift-level transitions are logged to the session log
+  (counters are otherwise in-memory only).
+- **Tests**: 33 node:test cases added under `test/` (`npm test`).
+- **Docs/packaging**: README + NOTICE rewritten for v2-v5; CHANGELOG backfilled;
+  install scripts are now transactional; publish scripts default to v2.2.0;
+  stale v1.0.0 dist zip removed and replaced with the v2.2.0 build.
+
+## v4 — cost fixes (from the peak-valley real-task observation, previously unlogged)
+
+- Bounded anchor tail in the request surface: `maxAnchorsInSurface: 1` — old
+  durable anchors stop entering requests (their text still lives in the log).
+- Skip the L2 near-field anchor on tool-result continuations (the L3 result
+  anchor already covers that transition) — `anchorAfterToolResult: false`.
+- Shorter anchor texts (~12 tokens instead of ~30).
+- Verified on the plugins-desc task: anchors 16 → 9, billed input −53%,
+  grade 5/5 intact.
+
+## v3 — completeness & review fixes (previously unlogged)
+
+- **Strict pressure gate** (real bug fix): the 80% middle-trim never runs when
+  the meter/llm/window is unknown — "over" starts false; trimming at zero
+  pressure is a bug, not a fallback.
+- **Protected trimming**: user / approval / goal / assistant messages are NEVER
+  trimmed; the marker enumerates what was dropped (kinds + tool callIds).
+- **Drift loop is soft-only**: removed the early-trim (40%) and maxTokens-2048
+  tightening from the drift escalation — wording compliance never takes
+  priority over task completeness. Only the FIRST reasoning block of a message
+  classifies (continuations never escalate).
+- **Completeness clause**: brevity applies to reasoning, never to reporting —
+  the final answer must include every confirmed fact; phase-1 anti-narration
+  clause fixes the 1024-cap stall.
+- **Round efficiency + depth rule**: batch tool calls in one round; shorten only
+  redundant probing/narration, never synthesis.
+- Honest A/B benchmark added (standard vs micro-inversion, 5 tasks × 2 presets).
+
 # 2.0.0 (2026-08-24)
 
 Global runtime mode (v2): the cold-start anchor becomes a persistent runtime
