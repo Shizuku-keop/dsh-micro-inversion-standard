@@ -242,28 +242,23 @@ function driftStateFor(agent) {
 
 | 级别 | 条件 | 动作 |
 |---|---|---|
-| 0（基线） | consecutive < 2 | L2/L3 基线锚 |
-| 1（强化） | consecutive ≥ 2 或 violations ≥ 3 | L2/L3 升级文案；注入一次重述消息（引述最近违规原文 + 规则） |
-| 2（再锚定） | violations ≥ 6 或 漂移率 ≥ 30%（近 20 个推理块） | 早期中段裁剪（见 4.5）+ 临时输出预算收紧（maxTokens 降到 2048，2-3 步后恢复）+ 重述消息 |
-| 3（重置） | 连续 3 个回合仍处 2 级 | 触发一次 region 压缩（`ctx.compaction.compactRegion` 中段），彻底重置表面；压缩完成后按 bootstrap 语义回受控阶段 |
+| 0（基线） | consecutive < 3 且 violations < 5 | L2/L3 基线锚 |
+| 1（强化） | consecutive ≥ 3 或 violations ≥ 5 | L2/L3 升级文案；注入一次重述消息（引述最近违规原文 + 规则） |
 
-合规恢复：连续 ≥3 个合规推理块 → 降一级（防止一次性矫枉过正）。
+> **设计边界（v3 修正）**：措辞漂移是**软信号**——它只会升级锚文案与重述消息，
+> **绝不触发上下文裁剪或输出预算收紧**。原 v2 草案中的"漂移触发早期裁剪（40%）+
+> maxTokens 2048 收紧"已被移除：措辞合规永远不能优先于任务完整性。上下文管理只由
+> `context-slimmer` 负责（显式压力门控，见 §3.3）。
+
+合规恢复：连续 ≥3 个合规消息的首块 → 降级（防止一次性矫枉过正）。
 
 ### 4.4 扫描实现注意（关键坑）
 
 **不能依赖 `session/event` 监听**：agent 平面 preset 中该事件被 dsh-scope 过滤
 （已实测确认），监听永不触发。必须用**增量扫描 `session.events` 数组**（与
 `tool-bootstrap.mjs` 的 `scanEvents` 同款 next 指针模式）：每次 pre-step 从
-`state.next` 扫到末尾，解析 `assistant/message` 事件的推理块并更新计数。
-resume/reload 时从头重建同一状态。
-
-### 4.5 早期中段裁剪（再锚定的上下文手段）
-
-漂移的根因之一是头/尾显著性被中段稀释。现有 `context-slimmer` 在压力 ≥80% 才
-裁剪；v2 增加**漂移触发裁剪**：级别 ≥2 且压力 ≥40% 时，对 `decision.messages`
-做与 80% 裁剪相同的头/尾保留（4096/1024 字符）+ 中段替换为恒定标记
-（复用 `splitSurface` 逻辑），**无需等上下文顶满**。裁剪后头（system prompt）
-与尾（近期消息 + 锚）显著性恢复，模型更容易重新咬住框架。
+`state.next` 扫到末尾，解析 `assistant/message` 事件的**首个推理块**（frame-setter）
+并更新计数；后续推理块是延续，不参与升级。resume/reload 时从头重建同一状态。
 
 ### 4.6 可观测性
 
@@ -293,7 +288,7 @@ resume/reload 时从头重建同一状态。
                                       ▼
                      下一 step（L2 再次注入）…循环
                                       │
-                     context-slimmer 80% 压力裁剪 / compaction（D3 级触发 region 压缩）
+                     context-slimmer 显式压力门控裁剪（保护性）/ compaction
 ```
 
 **Token 账本**（每步新增成本）：L1 换装仅一次；L2 每 step ≈30 token；
@@ -309,8 +304,8 @@ L3 每次工具调用 ≈30 token；D 扫描零 token（纯本地日志扫描）
 | L1 认知 persona | 极简 + we-need 协议 | 晋升时换装完整认知 persona | `preset/agent.cordis.yml` persona 行 + `tool-bootstrap.mjs`（`withWorkspaceLine` → 换装） |
 | L2 近场锚 | 无 | 新增 `agent/pre-step` 尾部注入 | 新 `preset/anchor-sustainer.mjs` |
 | L3 结果锚 | 无 | 新增 `tools/post-execute` additionalContexts 挂载 | 同上 |
-| D 漂移检测 | 无 | 新增推理块扫描 + 分级升级 + 早期裁剪 + 重述 | 同上 |
-| 上下文管理 | 80% 压力裁剪 + compaction | 增加漂移触发早期裁剪、D3 region 压缩 | `context-slimmer.mjs` 复用 `splitSurface` |
+| D 漂移检测 | 无 | 新增首个推理块扫描 + 软强化（升级锚文案 + 重述），无破坏性动作 | `anchor-sustainer.mjs` |
+| 上下文管理 | 80% 压力裁剪 + compaction | 显式压力门控 + 保护性裁剪（用户/审批/目标消息永不被删，标记枚举被裁内容） | `context-slimmer.mjs` 复用 `splitTrimable` |
 | 缓存破陈旧规 | `?v=2` | 新插件行名 `./anchor-sustainer.mjs?v=1` | `agent.cordis.yml` |
 
 实现顺序建议：先 L1（换装）→ 再 L2（近场锚，收益最大、成本最低）→ L3 →

@@ -34,9 +34,6 @@ export const name = 'micro-inversion-anchor-sustainer'
 /** The `tools/post-execute` waterfall must exist before this listener runs. */
 export const inject = ['tools']
 
-/** Reuse the deterministic head/middle/tail surface split from the slimmer. */
-import { splitSurface, measureMessageChars, routedTarget } from './context-slimmer.mjs?v=3'
-
 /** Opener classifier: conforming collective frames vs forbidden exploratory frames. */
 const CONFORM_RE = /^\s*(we\s+need|we'?ve|we'?ll|we\s+can|we\s+should|we\s+must|next,?\s+we)/i
 const VIOLATION_RE = /^\s*(let\s+me|i'?ll|i\s+(think|should|need|want|am|'m|guess)|let'?s|maybe\s+i|i\s+want)/i
@@ -49,10 +46,14 @@ export function classifyOpener(text) {
   return 'soft'
 }
 
-/** Escalation level derived from the drift counters. */
+/**
+ * Escalation level derived from the drift counters. Style drift is a SOFT
+ * signal: it escalates the anchor wording and re-assertion only — it NEVER
+ * triggers context trimming or output-budget caps, so wording compliance can
+ * never take priority over task completeness.
+ */
 export function escalationLevel(state) {
-  if (state.consecutive >= 3 || state.violations >= 6) return 2
-  if (state.consecutive >= 2 || state.violations >= 3) return 1
+  if (state.consecutive >= 3 || state.violations >= 5) return 1
   return 0
 }
 
@@ -78,33 +79,34 @@ function stateFor(session) {
 }
 
 /** Incrementally scan newly appended assistant/message events and classify
- * every reasoning block's opener. */
+ * the FIRST reasoning block of each message (the frame-setter). Later blocks
+ * are continuations and do NOT escalate — style policing must never punish
+ * legitimate follow-through. */
 function scanAndClassify(state, session) {
-  const events = session.events
+  const events = session.events ?? []
   for (; state.next < events.length; state.next += 1) {
     const event = events[state.next]
     if (event?.type !== 'assistant/message') continue
     const content = event.data?.message?.content
     if (!Array.isArray(content)) continue
-    for (const block of content) {
-      if (block?.type !== 'reasoning' || typeof block.text !== 'string') continue
-      const label = classifyOpener(block.text)
-      if (label === 'conform') {
-        state.consecutive = 0
-        state.conformStreak += 1
-        if (state.conformStreak >= 3 && state.violations > 0) {
-          // Recovery: 3 consecutive conforming blocks de-escalate.
-          state.violations = Math.max(0, state.violations - 2)
-          state.conformStreak = 0
-        }
-      } else if (label === 'violation') {
-        state.consecutive += 1
-        state.violations += 1
+    const first = content.find(block => block?.type === 'reasoning' && typeof block.text === 'string')
+    if (first === undefined) continue
+    const label = classifyOpener(first.text)
+    if (label === 'conform') {
+      state.consecutive = 0
+      state.conformStreak += 1
+      if (state.conformStreak >= 3 && state.violations > 0) {
+        // Recovery: 3 consecutive conforming messages de-escalate.
+        state.violations = Math.max(0, state.violations - 2)
         state.conformStreak = 0
-        state.lastViolation = block.text.trim().slice(0, 140)
       }
-      // 'soft' openers neither escalate nor reset — no false-positive feedback.
+    } else if (label === 'violation') {
+      state.consecutive += 1
+      state.violations += 1
+      state.conformStreak = 0
+      state.lastViolation = first.text.trim().slice(0, 140)
     }
+    // 'soft' openers neither escalate nor reset — no false-positive feedback.
   }
 }
 
@@ -146,64 +148,21 @@ function buildReassertion(state, level) {
   return `<system-reminder>\n[anchor] RE-ANCHOR (level ${level}): the reasoning opener "we need ..." is mandatory for every chain-of-thought block.${quote} Rewrite the next block with "we need ...".\n</system-reminder>`
 }
 
-/** Marker replacing the early-trimmed middle span at level >= 2. */
-function buildTrimMarker(split, droppedChars) {
-  const start = split.head.length
-  const end = start + split.middle.length - 1
-  return `<system-reminder>\n[anchor] Re-anchor trim: middle messages ${start}..${end} (~${droppedChars} chars) were removed from this request surface to restore head/tail salience. Full content remains in the session log. Continue with "we need ...".\n</system-reminder>`
-}
-
-const DEFAULTS = {
-  pressureRatio: 0.4,
-  earlyTrimHeadChars: 4096,
-  earlyTrimTailChars: 1024,
-  driftMaxTokens: 2048,
-}
-const CONFIG_KEYS = new Set(Object.keys(DEFAULTS))
-
 function resolveConfig(config = {}) {
-  for (const key of Object.keys(config)) {
-    if (!CONFIG_KEYS.has(key)) throw new Error(`${name}: unknown config key "${key}"`)
-  }
-  const resolved = { ...DEFAULTS, ...config }
-  if (typeof resolved.pressureRatio !== 'number' || resolved.pressureRatio <= 0 || resolved.pressureRatio >= 1) {
-    throw new Error(`${name}: pressureRatio must be in (0, 1)`)
-  }
-  for (const key of ['earlyTrimHeadChars', 'earlyTrimTailChars', 'driftMaxTokens']) {
-    if (!Number.isInteger(resolved[key]) || resolved[key] <= 0) throw new Error(`${name}: ${key} must be a positive integer`)
-  }
-  return Object.freeze(resolved)
+  const keys = Object.keys(config)
+  if (keys.length > 0) throw new Error(`${name}: unknown config key "${keys[0]}"`)
+  return Object.freeze({})
 }
 
-/** Early middle-trim at level >= 2 when pressure exceeds the ratio. */
-async function maybeEarlyTrim(ctx, agent, signal, messages, resolved) {
-  const meter = ctx.get('tokenMeter')
-  const llm = ctx.get('llm')
-  if (meter === undefined || llm === undefined) return messages
-  const session = agent.session
-  const target = routedTarget(session, agent)
-  if (target === undefined) return messages
-  let windowSize
-  try {
-    const info = await llm.resolveModelInfo(target.provider, target.model, signal)
-    windowSize = info?.context?.contextWindow
-  } catch {
-    return messages
-  }
-  if (!Number.isInteger(windowSize) || windowSize <= 0) return messages
-  if (signal?.aborted) return messages
-  const threshold = Math.floor(windowSize * resolved.pressureRatio)
-  if (meter.measure(session).totalTokens < threshold) return messages
-  const split = splitSurface(messages, resolved.earlyTrimHeadChars, resolved.earlyTrimTailChars)
-  if (split === null) return messages
-  const droppedChars = split.middle.reduce((sum, message) => sum + measureMessageChars(message), 0)
-  const marker = anchorMessage(buildTrimMarker(split, droppedChars))
-  return [...split.head, marker, ...split.tail]
-}
-
-/** Register the three global-runtime anchor mechanisms. */
+/**
+ * Register the two anchor mechanisms (L2 near-field, L3 result) plus the soft
+ * drift-reinforcement loop (D). Style drift ONLY escalates anchor wording and
+ * re-assertion — it NEVER triggers context trimming or output-budget caps, so
+ * wording compliance can never take priority over task completeness. Context
+ * management stays solely with context-slimmer (explicit pressure gate).
+ */
 export function apply(ctx, config) {
-  const resolved = resolveConfig(config ?? {})
+  resolveConfig(config ?? {})
 
   // ── L2: near-field anchor on every model request ─────────────────────────
   ctx.on('agent/pre-step', async (payload, next) => {
@@ -214,15 +173,10 @@ export function apply(ctx, config) {
     const info = levelFor(agent) ?? { state: null, level: 0 }
     let messages = decision.messages
 
-    // Re-assert once per escalation level, quoting the recent violation.
+    // Re-assert once per escalation, quoting the recent violation.
     if (info.state !== null && info.level > info.state.assertedLevel) {
       messages = [...messages, anchorMessage(buildReassertion(info.state, info.level))]
       info.state.assertedLevel = info.level
-    }
-    // Level >= 2: early middle trim (restores head/tail salience below 80%).
-    if (info.level >= 2) {
-      messages = await maybeEarlyTrim(ctx, agent, payload.signal, messages, resolved)
-      if (payload.signal?.aborted) return decision
     }
     // Near-field anchor last = nearest the generation point.
     const anchorText = info.level >= 1 ? NEAR_ANCHOR_HARD : NEAR_ANCHOR_BASE
@@ -240,25 +194,5 @@ export function apply(ctx, config) {
       ...decision,
       additionalContexts: [...(decision.additionalContexts ?? []), anchorMessage(anchorText)],
     }
-  }, { prepend: true })
-
-  // ── D: tighten the output budget while drifting at level >= 2 ────────────
-  ctx.on('agent/request', async (payload, next) => {
-    const requestConfig = await next()
-    const agent = payload?.agent
-    if (agent === undefined) return requestConfig
-    const info = levelFor(agent) ?? { level: 0 }
-    if (info.level >= 2) {
-      if (requestConfig.maxTokens === undefined || requestConfig.maxTokens > resolved.driftMaxTokens) {
-        return { ...requestConfig, maxTokens: resolved.driftMaxTokens }
-      }
-      return requestConfig
-    }
-    if (requestConfig.maxTokens === resolved.driftMaxTokens) {
-      const rest = { ...requestConfig }
-      delete rest.maxTokens
-      return rest
-    }
-    return requestConfig
   }, { prepend: true })
 }

@@ -239,15 +239,101 @@ DeepSeek-V4 系列是带可见思维链（Chain-of-Thought）的推理模型：�
 | `tool-bootstrap.compactionTools` | [] | 压缩后受控阶段的补充工具集 |
 | `context-slimmer.resultTrimThresholdChars` | 8192 | 工具结果裁剪阈值（字符） |
 | `context-slimmer.resultHeadChars / resultTailChars` | 4096 / 1024 | 结果保留的头/尾 |
-| `context-slimmer.pressureRatio` | 0.8 | 80% 压力中段压缩触发比率 |
+| `context-slimmer.pressureRatio` | 0.8 | 80% 压力中段压缩触发比率（显式门控：窗口未知/无 meter 时跳过） |
 | `context-slimmer.spillResults` | true | 是否落盘全文 |
-| `anchor-sustainer.pressureRatio` | 0.4 | 漂移级 2 早期裁剪触发比率 |
-| `anchor-sustainer.driftMaxTokens` | 2048 | 漂移时输出上限收紧值 |
-| `anchor-sustainer.earlyTrimHeadChars / TailChars` | 4096 / 1024 | 早期裁剪保留的头/尾 |
 
 ---
 
-## 十、发布与后续
+## 十、关键问题修正（v3 review）
+
+> 针对评审提出的四项关键问题，逐条核实并修正如下：
+
+### 10.1 "we need 只是风格代理指标，缺对照与真实 usage 数据"
+
+**承认**：早期文档的"省 Token / 质量提升"结论主要基于单一任务的步数对比，没有
+`standard` 基线、没有能力题本、没有真实 usage 数据。修正：
+
+- 新增 **A/B 基准脚本**：同一任务题本（环境检查 / 求和 / 文件往返）分别跑
+  `standard` 与 `micro-inversion-standard`，从会话日志提取真实
+  `inputTokens / outputTokens / cacheReadTokens / reasoningTokens`、步数、
+  工具调用数与能力校验（见 §11 实测表）；
+- **锚定开销如实入账**：L2 ≈30 Token/步 + L3 ≈30 Token/次工具调用，文档不再
+  宣称"净节省"而未给数据——是否净节省以实测为准；
+- 步数对比的混杂因素（记忆基线复用）已注明。
+
+### 10.2 中段裁剪不语义摘要，可能删除需求/授权/失败记录
+
+**修正**：`context-slimmer` 的 `agent/pre-step` 裁剪改为**保护性裁剪**：
+
+- **永不被裁**：真实用户消息（需求/验收条件）、审批记录（approval）、目标轮次
+  （goal）、模型分析（assistant 角色）——见 `PROTECTED_KINDS` 与 `splitTrimable`；
+- 只裁剪中段的**可丢弃内容**：工具结果、运行时快照、锚、注入提醒；
+- 标记**枚举被裁内容**（种类计数 + 工具 callId），并提示模型"若其中有失败记录或
+  任务所需，可重跑/重读；durable log 保留全文，/compact 生成持久摘要"。
+
+### 10.3 实现错误：meter/llm 缺失或窗口未知时在 0% 压力下直接裁剪
+
+**确认并修复（真实 bug）**：原 `agent/pre-step` 压力门控在 `meter/llm 缺失`、
+`路由未知`、`窗口未知` 三种情况下不 return、直接落到 `splitSurface` 裁剪。
+已重构为**默认跳过**：`over` 初始为 `false`，只有显式测得压力 ≥ 阈值才裁剪；
+任何未知路径都原样放行。单测覆盖四种路径（缺失 / 窗口未知 / 压力不足 / 压力达标）。
+
+### 10.4 漂移触发破坏性动作，措辞合规优先于任务完整性
+
+**修正**：`anchor-sustainer` 的漂移检测改为**纯软强化**：
+
+- 升级动作只剩：强化锚文案 + 重述消息（引述违规原文）；
+- **删除**漂移触发早期裁剪与 maxTokens 2048 收紧（`agent/request` 钩子移除）；
+- 分类只统计每条消息的**首个推理块**（frame-setter），延续块不升级；
+- 上下文管理完全交给 `context-slimmer`（显式压力门控 + 保护性裁剪）。
+
+---
+
+## 十一、A/B 实测对比（standard vs micro-inversion）
+
+> 数据来源：真实会话日志 `session.export`（usage 字段为供应商实际计费口径）。
+> 环境检查题本 = "检查电脑的整体环境"；求和题本 = "用 PowerShell 计算 1 到 100 的整数和"。
+> 版本注记：v1/v2 环境检查来自既有会话（v2.0 构建），standard 与求和题本来自 v3 修复后构建。
+
+### 环境检查
+
+| 指标 | standard | v1（冷启动锚定） | v2（全局运行态） |
+| --- | --- | --- | --- |
+| 推理步数 | 7 | 13 | **4** |
+| 工具调用 | 19 | 35 | **7** |
+| 输出 tokens | 27,751 | 15,836 | **2,017**（↓ 92%） |
+| 其中推理 tokens | 21,843 | 10,408 | **362**（↓ 98%） |
+| 输入 tokens（累计） | 25,209 | 14,334 | **11,375**（↓ 55%） |
+| cacheRead（累计） | 214,272 | 278,528 | 39,296 |
+| 锚定消息数 | 0 | 0 | 11（≈330 tokens） |
+| **能力分（5 项事实）** | **5/5** | 5/5 | **4/5（缺 Windows Build 号）** |
+
+### 求和任务
+
+| 指标 | standard | micro-inversion |
+| --- | --- | --- |
+| 结果 | 5050 ✓ | 5050 ✓ |
+| 步数 / 调用 | 2 / 1 | 2 / 1 |
+| 输入 / 输出 tokens | 8,252 / 169 | **2,666** / 159 |
+| cacheRead | 18,304 | 11,904 |
+| 锚定消息 | 0 | 3 |
+
+### 如实解读（不夸大）
+
+1. **输出/推理量级缩减可复现**：v2 环境检查推理 tokens 362 vs standard 21,843（约 60×），
+   步数与调用也减半以上；求和任务输入减少 3 倍。锚定开销（≈30 tokens/条）相对
+   节省可忽略。
+2. **存在完整性权衡**：v2 环境检查能力分 4/5——**漏报了 Windows Build 号**。
+   "更精简"与"更完整"之间存在张力，需要更大题本验证是否稳定复现；若稳定，
+   应在 persona/锚中补一条"最终报告必须包含全部已确认事实"的完整性条款。
+3. **混杂因素**：三者的环境检查都复用了 mnemon 硬件基线（standard 答案也引用了
+   记忆），检查工作量均被压缩；v2 数据来自单次会话，样本量小，仅供方向性参考。
+4. **cacheRead 不做结论**：请求次数与前缀长度不同（v2 请求更少、前缀更短），
+   原始数值不可直接对比，仅如实列出。
+
+---
+
+## 十二、发布与后续
 
 ### 10.1 发布状态
 

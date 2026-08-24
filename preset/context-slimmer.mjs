@@ -195,17 +195,70 @@ export function splitSurface(messages, headChars, tailChars) {
   }
 }
 
-/** One constant-shaped marker message replacing the trimmed middle span. */
+/**
+ * Source kinds that must NEVER be trimmed: real user input (requirements,
+ * acceptance criteria), approval records, and goal rounds. Model-authored
+ * analysis (role 'assistant') is also protected. Everything else — tool
+ * results, runtime-context snapshots, anchors, injected reminders — is
+ * trimable.
+ */
+const PROTECTED_KINDS = new Set(['user', 'approval', 'goal'])
+
+function isProtected(message) {
+  if (message?.role === 'assistant') return true
+  const kind = message?.source?.kind
+  return typeof kind === 'string' && PROTECTED_KINDS.has(kind)
+}
+
+/**
+ * Split the surface like splitSurface, but DROP only trimable messages from
+ * the middle; protected messages are kept in place between head and tail.
+ * Returns `null` when the middle holds nothing trimable (nothing safe to
+ * remove — high pressure alone must never destroy protected content).
+ */
+export function splitTrimable(messages, headChars, tailChars) {
+  const base = splitSurface(messages, headChars, tailChars)
+  if (base === null) return null
+  const keptMiddle = base.middle.filter(isProtected)
+  const trimable = base.middle.filter(message => !isProtected(message))
+  if (trimable.length === 0) return null
+  const droppedChars = trimable.reduce((sum, message) => sum + measureMessageChars(message), 0)
+  return {
+    head: base.head,
+    keptMiddle,
+    trimable,
+    tail: base.tail,
+    droppedChars,
+  }
+}
+
+/**
+ * One constant-shaped marker message replacing the trimmed middle span. It
+ * ENUMERATES what was trimmed (kinds + tool call ids) so the model knows the
+ * content exists and can recover it on demand.
+ */
 function buildSurfaceMarker(split, droppedChars, percent) {
   const start = split.head.length
-  const end = start + split.middle.length - 1
+  const end = start + split.keptMiddle.length + split.trimable.length - 1
+  const byKind = {}
+  const toolIds = []
+  for (const message of split.trimable) {
+    const kind = message?.source?.kind ?? message?.role ?? '?'
+    byKind[kind] = (byKind[kind] ?? 0) + 1
+    const callId = message?.source?.callId
+    if (typeof callId === 'string' && callId.length > 0) toolIds.push(callId)
+  }
+  const kinds = Object.entries(byKind).map(([kind, count]) => `${kind}×${count}`).join(', ')
+  const toolNote = toolIds.length > 0
+    ? ` Trimmed tool calls: ${toolIds.slice(0, 12).join(', ')}${toolIds.length > 12 ? '…' : ''}.`
+    : ''
   return {
     id: globalThis.crypto.randomUUID(),
     role: 'user',
     content: [{
       type: 'text',
       text: '<system-reminder>\n'
-        + `[micro-inversion: context pressure reached ${percent}% of the model window. Messages ${start}..${end} (~${droppedChars} chars) were trimmed from this request surface; the durable session log keeps the full content, and /compact produces a durable summary. The system prompt, tool catalog, head prefix, and tail are unchanged.]`
+        + `[micro-inversion: context pressure reached ${percent}% of the model window. Trimmed middle span (messages ${start}..${end}, ~${droppedChars} chars) — ${kinds}.${toolNote} User messages, approvals, goal rounds, and model analysis were NEVER trimmed. The durable session log keeps everything; if any trimmed tool call was a failure record or is needed for the task, re-run or re-read it. /compact produces a durable summary.]`
         + '\n</system-reminder>',
     }],
     source: { kind: 'micro-inversion-trim', plugin: name },
@@ -269,7 +322,10 @@ export function apply(ctx, config) {
     return { kind: 'accept', content: [{ type: 'text', text: head + marker + tail }] }
   }, { prepend: true })
 
-  // ── Hook 2: agent/pre-step — at 80% window pressure, trim the middle span.
+  // ── Hook 2: agent/pre-step — at pressureRatio of the window, DROP only
+  //    trimable middle messages. The pressure gate defaults to SKIP: any
+  //    unknown (missing meter/llm, unknown route, unknown window) leaves the
+  //    request untouched — trimming at zero pressure is a bug, not a fallback.
   ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next()
     if (decision.kind !== 'enter') return decision
@@ -280,16 +336,16 @@ export function apply(ctx, config) {
     const messages = decision.messages
     if (!Array.isArray(messages) || messages.length < 2) return decision
 
-    // Cheap gate: if the surface cannot even fill head + tail, no trim is
-    // possible — skip the token-meter and model-info lookups entirely.
+    // Cheap gate: the surface cannot even fill head + tail → nothing to trim.
     const totalChars = messages.reduce((sum, message) => sum + measureMessageChars(message), 0)
     if (totalChars <= resolved.surfaceHeadChars + resolved.surfaceTailChars) return decision
     if (signal?.aborted) return decision
 
-    // Pressure gate: current request pressure vs the routed model's window.
+    // Pressure gate — explicit measurement only. `over` starts false.
+    let over = false
+    let percent = 0
     const meter = ctx.get('tokenMeter')
     const llm = ctx.get('llm')
-    let percent = 0
     if (meter !== undefined && llm !== undefined) {
       const target = routedTarget(session, agent)
       if (target !== undefined) {
@@ -299,29 +355,28 @@ export function apply(ctx, config) {
           if (Number.isInteger(windowSize) && windowSize > 0) {
             const measurement = meter.measure(session)
             const threshold = Math.floor(windowSize * resolved.pressureRatio)
-            if (measurement.totalTokens < threshold) return decision
-            percent = Math.min(100, Math.round((measurement.totalTokens / windowSize) * 100))
+            over = measurement.totalTokens >= threshold
+            if (over) percent = Math.min(100, Math.round((measurement.totalTokens / windowSize) * 100))
           }
         } catch {
-          // Unknown window / route: skip trimming — never brick the request.
-          return decision
+          // Unknown window / route: skip — never brick the request.
         }
       }
     }
+    if (!over) return decision
     if (signal?.aborted) return decision
 
-    const split = splitSurface(messages, resolved.surfaceHeadChars, resolved.surfaceTailChars)
+    const split = splitTrimable(messages, resolved.surfaceHeadChars, resolved.surfaceTailChars)
     if (split === null) return decision
 
-    const droppedChars = split.middle.reduce((sum, message) => sum + measureMessageChars(message), 0)
-    const marker = buildSurfaceMarker(split, droppedChars, percent)
+    const marker = buildSurfaceMarker(split, split.droppedChars, percent)
+    const trimmed = [...split.head, ...split.keptMiddle, marker, ...split.tail]
 
-    let trimmed = [...split.head, marker, ...split.tail]
     if (resolved.spillTrimmedSurface) {
       const store = ctx.get('spillStore')
       if (store !== undefined) {
         try {
-          const text = split.middle
+          const text = split.trimable
             .map(message => (Array.isArray(message?.content) ? message.content : []))
             .flat()
             .map(block => (block?.type === 'text' ? block.text : ''))

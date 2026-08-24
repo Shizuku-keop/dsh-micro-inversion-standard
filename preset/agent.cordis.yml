@@ -269,27 +269,29 @@
 # ── context slimming hooks ──────────────────────────────────────────────────
 
 # `tools/post-execute` (trim > 8192 chars, keep head 4096 / tail 1024, spill
-# the full text) and `agent/pre-step` (at 80% of the routed model window,
-# replace the middle message span with one trim marker). Publishes no service
+# the full text) and `agent/pre-step` (explicit pressure gate: only trims when
+# the routed window is known and measured pressure >= ratio; DROPS only
+# trimable middle messages — user/approval/goal/assistant content is never
+# removed, and the marker enumerates what was trimmed). Publishes no service
 # and consumes only host-plane services (`tools`, `spillStore`, `tokenMeter`,
 # `llm`), so it sits loose like `tool-jobs`. The `?v=N` query busts the Node
 # ESM module cache so an edited plugin actually reloads on re-mount.
 - id: context-slimmer
-  name: ./context-slimmer.mjs?v=3
+  name: ./context-slimmer.mjs?v=4
   config: {}
 
 # ── global runtime anchors (v2) ─────────────────────────────────────────────
 
 # L2 near-field anchor (every request gets a constant "we need" reminder at
 # the tail), L3 result anchor (every accepted tool result attaches a continue
-# anchor via `additionalContexts`), and the D drift-detection loop (classifies
-# every reasoning block opener, escalates anchor wording / re-assertion /
-# early middle trim / tighter output budget on violations, de-escalates on
-# recovery). Publishes no service; consumes only host-plane services
-# (`tools`, `tokenMeter`, `llm`) plus `splitSurface`/`routedTarget` imported
-# from context-slimmer (same `?v=` URL → same module instance).
+# anchor via `additionalContexts`), and the D drift-reinforcement loop
+# (classifies each message's FIRST reasoning-block opener; on drift escalates
+# anchor wording and a re-assertion message only — style drift NEVER triggers
+# context trimming or output caps, so wording compliance never takes priority
+# over task completeness). Publishes no service; consumes only host-plane
+# services (`tools`).
 - id: anchor-sustainer
-  name: ./anchor-sustainer.mjs?v=1
+  name: ./anchor-sustainer.mjs?v=2
   config: {}
 
 # ── delegation and workflows ────────────────────────────────────────────────
