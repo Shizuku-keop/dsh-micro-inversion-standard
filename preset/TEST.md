@@ -131,9 +131,26 @@ micro-inversion 裁剪标记原文、以及标记里给出的完整结果保存�
 
 判定：前四项全中即 v2 通过。
 
+## 测试 7 · 稳态锚降载（v6，throttleAfterConforms）
+
+晋升后连续 4 个以上推理块都以 "we need" 起手（纯推理问答场景），观察会话日志：
+
+- 第 5 步起 `user/message` 锚事件停止增长（L2 近场锚被跳过；日志出现
+  `L2 near-field anchor throttled (conformStreak=…)`）；
+- 故意以 "让我看看…" 或 "Let me…" 起手一个推理块后，下一步日志出现
+  `L2 near-field anchor re-armed`，锚事件恢复增长；
+- 系统提示词中 L1 认知 persona 始终存在（`collective execution unit` +
+  `FORBIDDEN openers`）——降载期间协议仍由 L1 强制；
+- L3 结果锚（`result in hand`）在工具调用后始终出现，不受降载影响。
+
+判定：日志中同时观察到 throttled 与 re-armed 两条记录；降载区间无 L2 锚，
+重新武装后恢复。`0`（关闭降载）时全程每步都有 L2 锚。
+
 ## 快速验收（30 秒版）
 
-> 自动化：仓库根目录 `npm test`（test/，33 项：晋升状态机 / 裁剪切分 / 漂移扫描 / 双语分类 / v5 新行为）。
+> 自动化：仓库根目录 `npm test`（test/，40 项：晋升状态机 / 裁剪切分 / 漂移扫描 /
+> 双语分类 / v5 新行为 / v6 稳态降载）；提交/发布前另跑 `node scripts/validate.mjs`
+> 完整性门禁（CI 会自动执行两者）。
 
 1. 新会话发送 `请用 pwsh 运行 Get-Location`；
 2. 看第一条请求的工具清单是否为 2 个、推理是否以 "we need" 开头；

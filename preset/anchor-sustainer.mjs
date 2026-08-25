@@ -22,6 +22,17 @@
  *      compliance must never take priority over task completeness). Recovery
  *      (>=3 consecutive conforming blocks) de-escalates.
  *
+ * v6 — stable-compliance throttling (odai lesson: reinforce only where
+ * evidence shows a gap): after `throttleAfterConforms` (default 4)
+ * CONSECUTIVE conforming openers at base level, the L2 near-field anchor is
+ * skipped — the L1 persona (always in the system prompt) still carries the
+ * mandatory protocol, so the inversion guarantee does not depend on the
+ * per-step reminder. ANY non-conforming opener (soft OR violation) resets the
+ * streak and re-arms the anchor on the very next step, so the token saving
+ * only ever accrues while compliance is demonstrated. Escalated sessions
+ * (level >= 1) are never throttled. L3 result anchors stay unconditional —
+ * the tool-result transition is where drift historically starts.
+ *
  * Composes with `tool-bootstrap.mjs` (phase-1 whitelist filter) and
  * `context-slimmer.mjs` (80% pressure trim + spill): both register prepend
  * listeners and are declared before this row in agent.cordis.yml, so they run
@@ -59,6 +70,20 @@ export function escalationLevel(state) {
   return 0
 }
 
+/**
+ * v6: stable-compliance throttling (odai lesson: reinforce only where evidence
+ * shows a gap — "按需补证，只在缺口会改变做法时才强化"). The L2 near-field
+ * anchor is skipped once the opener has been stably conforming for
+ * `throttleAfterConforms` blocks at base level; ANY non-conforming opener
+ * (soft or violation) resets the streak, so the saving only ever accrues while
+ * compliance is demonstrated. `0` disables throttling.
+ */
+export function shouldThrottleNearAnchor(state, level, resolved) {
+  if (state === null || level !== 0) return false
+  const n = resolved?.throttleAfterConforms ?? 0
+  return Number.isInteger(n) && n > 0 && state.conformStreak >= n
+}
+
 /** Per-session drift state. Sessions append events only; the scan resumes from
  * the first event it has not inspected yet, so resume/reload rebuild the same
  * counters from the durable log. */
@@ -75,6 +100,7 @@ function stateFor(session) {
       assertedLevel: 0,
       lastViolation: '',
       lastLoggedLevel: 0,
+      lastThrottled: false,
     }
     stateBySession.set(session, state)
   }
@@ -108,8 +134,13 @@ export function scanAndClassify(state, session) {
       state.violations += 1
       state.conformStreak = 0
       state.lastViolation = first.text.trim().slice(0, 140)
+    } else {
+      // v6: a soft opener is NOT a conforming opener — it breaks the stable
+      // streak so anchor throttling re-arms (reinforcement resumes on the
+      // next step). Soft still never counts as a violation and never
+      // escalates — no false-positive feedback.
+      state.conformStreak = 0
     }
-    // 'soft' openers neither escalate nor reset — no false-positive feedback.
   }
 }
 
@@ -159,6 +190,10 @@ const DEFAULTS = {
   // Tool-result continuations already carry the L3 result anchor; do not
   // re-inject the L2 near-field anchor on those steps (redundant cost).
   anchorAfterToolResult: false,
+  // v6: skip the L2 near-field anchor after this many CONSECUTIVE conforming
+  // openers at base level (0 = never throttle). Any soft/violation opener
+  // resets the streak and re-arms on the next step; level >= 1 never throttles.
+  throttleAfterConforms: 4,
 }
 const CONFIG_KEYS = new Set(Object.keys(DEFAULTS))
 
@@ -173,6 +208,9 @@ export function resolveConfig(config = {}, logger) {
   }
   if (typeof resolved.anchorAfterToolResult !== 'boolean') {
     throw new Error(`${name}: anchorAfterToolResult must be a boolean`)
+  }
+  if (!Number.isInteger(resolved.throttleAfterConforms) || resolved.throttleAfterConforms < 0) {
+    throw new Error(`${name}: throttleAfterConforms must be a non-negative integer`)
   }
   return Object.freeze(resolved)
 }
@@ -199,6 +237,11 @@ function lastRealMessage(messages) {
  * BOUNDED anchor tail (old durable anchors stop entering requests), and the L2
  * near-field anchor is skipped on tool-result continuations (the L3 result
  * anchor already covers that transition).
+ *
+ * v6 (stable-compliance throttling): with `throttleAfterConforms` consecutive
+ * conforming openers at base level the L2 near-field anchor stops being
+ * injected (L1 persona still enforces the protocol; any soft/violation opener
+ * re-arms it). L3 stays unconditional.
  */
 export function apply(ctx, config) {
   const resolved = resolveConfig(config ?? {}, ctx.logger)
@@ -243,6 +286,23 @@ export function apply(ctx, config) {
     if (!resolved.anchorAfterToolResult && lastRealMessage(messages)?.source?.kind === 'tool') {
       return { ...decision, messages }
     }
+    // v6 (odai lesson: reinforce only where evidence shows a gap): with a
+    // stable conforming streak the L2 near-field anchor is skipped — the L1
+    // persona still carries the mandatory protocol, and ANY non-conforming
+    // opener re-arms it on the next step.
+    const throttled = shouldThrottleNearAnchor(info.state, info.level, resolved)
+    if (info.state !== null && throttled !== info.state.lastThrottled) {
+      info.state.lastThrottled = throttled
+      try {
+        ctx.logger.info(
+          `${name}: L2 near-field anchor ${throttled ? 'throttled' : 're-armed'} `
+          + `(conformStreak=${info.state.conformStreak}, level=${info.level})`,
+        )
+      } catch {
+        // Logger unavailable — best-effort only.
+      }
+    }
+    if (throttled) return { ...decision, messages }
     // Near-field anchor last = nearest the generation point.
     const anchorText = info.level >= 1 ? NEAR_ANCHOR_HARD : NEAR_ANCHOR_BASE
     return { ...decision, messages: [...messages, anchorMessage(anchorText)] }

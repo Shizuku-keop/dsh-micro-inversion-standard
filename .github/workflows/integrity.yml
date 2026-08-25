@@ -1,0 +1,21 @@
+name: integrity
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # The preset and its tests are dependency-free; validate.mjs is a
+      # zero-install gate (syntax, yml row references, version consistency).
+      - name: Repository integrity gate
+        run: node scripts/validate.mjs
+      - name: Automated test suite
+        run: npm test

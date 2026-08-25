@@ -1,3 +1,39 @@
+# 2.3.0 (2026-08-25) — odai 经验：稳态锚降载 + 工程门禁
+
+本版把 orziz/odai 组件评测中可迁移的经验落地：按证据补强化（只在合规已被证明
+时才付 L2 近场锚的成本）、完整性门禁（fail-closed 校验）、可复现评测取证与
+维护/评测契约。anchor-sustainer `?v=5`。
+
+## v6 — 稳态锚降载（anchor-sustainer）
+
+- **新旋钮 `throttleAfterConforms`（默认 4）**：连续 N 个合规推理块（base level）
+  后，L2 近场锚停止注入——L1 认知 persona 始终在系统提示词中强制 "we need" 协议，
+  反演保证不依赖逐步提醒；`0` 关闭。
+- **soft 起手词现在也重置连击**：`scanAndClassify` 中 soft 块不再"什么都不做"，
+  而是打破稳定连击——任何非合规起手词（含"刚读到结果"式观察续写）都在下一步
+  立即重新武装锚，token 节省只发生在合规已被实测证明的区间。
+- **永不降载的场景**：drift level ≥ 1（升级态）不降载；L3 结果锚不降载
+  （工具结果转场是历史漂移高发点，最便宜的强化必须保留）。
+- **可观测性**：降载/重新武装切换写入会话日志（含 conformStreak / level）。
+
+## 工程门禁与评测取证
+
+- **`scripts/validate.mjs`**（零依赖，fail-closed）：`node --check` 全部
+  preset/scripts 的 .mjs；`agent.cordis.yml` 本地插件行（`./x.mjs?v=N`）文件存在
+  且缓存戳为正整数；`preset.yml` 选择器元数据齐全；package.json 版本与 CHANGELOG
+  顶部标题一致；当前版本 dist zip 缺失仅告警。
+- **`.github/workflows/integrity.yml`**：push/PR 自动跑 validate + `npm test`
+  （无需 npm install，测试零外部依赖）。
+- **`scripts/analyze-session.mjs`**：对 `session.export` 解压出的 JSONL 做取证
+  统计（起手词分类 conform/violation/soft、锚/裁剪计数、request 工具数/maxTokens、
+  usage 汇总，支持 `--json`）——让 A/B 评测可复现（odai 的"指纹可复现"经验）。
+- **`MAINTAINING.md`**：单一事实源、`?v=` 缓存戳规则、改动门禁、升版/发布流程、
+  A/B 评测契约（off 臂必须干净隔离、报告必须同时给质量与 token、禁止无条件省
+  token 的宣传）。
+- **测试**：新增 5 项 v6 单测（soft 重置连击 / 连击累积 / 降载阈值与豁免 /
+  0 关闭 / 配置校验），全套 **40 项 node:test 全过**。
+- **文档**：README / NOTICE / TEST.md 同步 v6 行为与新旋钮。
+
 # 2.2.0 (2026-08-25) — v5 hardening + v3/v4 backfill
 
 This release records the previously-unlogged v3/v4 work and adds the v5

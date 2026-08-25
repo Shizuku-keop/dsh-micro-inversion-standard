@@ -18,6 +18,15 @@
 # transitions are logged. New knobs: postCompactionMaxTokens,
 # dropProtectedUnderPressure. ?v= stamps bumped (7/5/4).
 #
+# rev 5 (v6 · odai lessons): stable-compliance anchor throttling — after
+# `throttleAfterConforms` consecutive conforming openers at base level the L2
+# near-field anchor stops being injected (L1 persona still enforces the
+# protocol; ANY soft/violation opener re-arms it on the next step), cutting
+# per-step anchor cost where compliance is already demonstrated; a soft opener
+# now breaks the conform streak too. anchor-sustainer ?v=5. Plus repo integrity
+# tooling (scripts/validate.mjs, scripts/analyze-session.mjs, CI) and
+# MAINTAINING.md release/evaluation contract (see CHANGELOG 2.3.0).
+#
 # Phase 1 (Bootstrap anchor) — before the first durable tool call or the first
 # substantive reply:
 #   - model-visible tools: exactly the Minimal preset pair — one persistent
@@ -308,10 +317,17 @@
 # over task completeness). Publishes no service; consumes only host-plane
 # services (`tools`).
 - id: anchor-sustainer
-  name: ./anchor-sustainer.mjs?v=4
-  config: {}
+  name: ./anchor-sustainer.mjs?v=5
+  config:
+    # v6: skip the L2 near-field anchor after this many CONSECUTIVE conforming
+    # openers at base level (0 = never throttle). Any soft/violation opener
+    # resets the streak and re-arms the anchor on the next step; escalated
+    # sessions (drift level >= 1) are never throttled. L3 result anchors stay
+    # unconditional. Saves per-step anchor tokens in stable sessions.
+    throttleAfterConforms: 4
   # v5: bilingual EN/ZH opener detection is built in; drift-level transitions
   # are logged to the session log.
+  # v6: throttle engage/re-arm transitions are also logged.
 
 # ── delegation and workflows ────────────────────────────────────────────────
 

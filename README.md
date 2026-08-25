@@ -25,7 +25,9 @@ KV Cache 对未变前缀持续命中。
    L2 每次请求在尾部注入恒定近场锚；L3 每个工具结果经 harness 原生
    `additionalContexts` 挂接续锚；D 漂移检测闭环增量扫描推理块起手词
    （**中英文双语**），违规时升级锚文案并注入重述消息（纯软强化，绝不触发
-   裁剪或输出收紧）。
+   裁剪或输出收紧）。**v6 稳态锚降载**：连续 `throttleAfterConforms`（默认 4）
+   个合规推理块后跳过 L2 近场锚（L1 persona 仍强制协议；任意 soft/违规起手词
+   立即重新武装）——只在合规已被证明时才省这一步的锚 token。
 4. **上下文瘦身（Context Slimming）** — `tools/post-execute` 把超过 8192 字符
    的工具结果裁剪为 头4096 + 标记 + 尾1024（v5：按真实标记长度动态拟合，
    绝不超出阈值），全文落盘为会话作用域 spill artifact 并在标记中给出真实路径；
@@ -46,11 +48,16 @@ micro-inversion-standard/
 │   ├── anchor-sustainer.mjs   ← v2 全局锚：L2 近场锚 + L3 结果锚 + D 漂移检测
 │   ├── NOTICE.md              ← 实现说明（需求如何落地）
 │   └── TEST.md                ← 验收测试脚本
-├── test/                      ← node:test 自动化测试（npm test）
+├── test/                      ← node:test 自动化测试（npm test，40 项）
+├── scripts/                   ← 维护工具（见下）
+│   ├── validate.mjs           ← 零依赖完整性门禁（语法/yml 引用/版本一致性）
+│   └── analyze-session.mjs    ← 会话取证分析器（A/B 评测证据，可复现）
+├── .github/workflows/         ← CI：push/PR 自动跑 validate + npm test
 ├── install.ps1                ← Windows 安装脚本（事务化覆盖）
 ├── install.sh                 ← POSIX 安装脚本（事务化覆盖）
 ├── docs/                      ← v2 架构方案 + 工作总结（含 A/B 实测）
 ├── README.md
+├── MAINTAINING.md             ← 维护纪律（单一事实源 / 门禁 / 发布 / 评测契约）
 ├── LICENSE                    ← MIT（含 dsh-anchored-standard 归属）
 ├── CHANGELOG.md
 └── package.json               ← npm 发布元数据（默认 private）
@@ -114,7 +121,22 @@ Windows 默认 `dshHome` = `%USERPROFILE%\.dsh`，POSIX 默认 = `$HOME/.dsh`。
    应看到 `[... micro-inversion: … trimmed …]` 裁剪标记 + `Full result:` 真实路径。
 
 完整验收脚本见 `preset/TEST.md`（含会话日志 `request/header` 线缆级验证方法），
-自动化单测见 `test/`（`npm test`，33 项）。
+自动化单测见 `test/`（`npm test`，40 项）；提交/发布前跑 `node scripts/validate.mjs`
+完整性门禁（语法 / yml 行引用 / 版本一致性），CI 会自动执行两者。
+
+## 评测与取证（可复现 A/B）
+
+`scripts/analyze-session.mjs` 对 `session.export` 解压出的 JSONL（文件或目录）做
+证据统计：推理块起手词分类（conform/violation/soft，双语）、锚/裁剪计数、
+`request/header` 工具数与 maxTokens、usage 汇总（input/output/cacheRead/reasoning）：
+
+```sh
+node scripts/analyze-session.mjs session.jsonl          # 人类可读
+node scripts/analyze-session.mjs --json session.jsonl   # 机器可读
+```
+
+评测纪律见 `MAINTAINING.md`：off 臂必须干净隔离、报告必须同时给质量与 token、
+禁止从单次采样宣称无条件省 token。
 
 ## 配置旋钮
 
@@ -132,7 +154,9 @@ Windows 默认 `dshHome` = `%USERPROFILE%\.dsh`，POSIX 默认 = `$HOME/.dsh`。
   `skipTools` / `dropProtectedUnderPressure`（v5 最后手段，默认关：中段全为
   保护消息时不裁剪；开则裁剪且标记注明）。
 - **anchor-sustainer**：`maxAnchorsInSurface`（1）/ `anchorAfterToolResult`
-  （false）；起手词检测为内置中英文双语，无需配置。
+  （false）/ `throttleAfterConforms`（v6，默认 4：连续 N 个合规推理块后跳过 L2
+  近场锚，0 关闭；任意 soft/违规起手词重置连击并立即重新武装）；起手词检测为
+  内置中英文双语，无需配置。
 
 改完 `.mjs` 后，把组合文件里对应行的 `?v=N` 缓存戳加 1（破 Node ESM 模块
 缓存），再重启 `dsh web`。详见 `preset/NOTICE.md`。
@@ -154,6 +178,11 @@ Windows 默认 `dshHome` = `%USERPROFILE%\.dsh`，POSIX 默认 = `$HOME/.dsh`。
 - **锚的持久化**：L2/L3 锚以 `user/message` 事件进入持久日志（保证 resume 后
   语义一致）；请求面只保留最新 `maxAnchorsInSurface` 条（v4），日志累积由
   `/compact` 摘要处理。
+- **稳态锚降载（v6）**：连续 `throttleAfterConforms` 个合规起手词后，L2 近场锚
+  停止注入（L1 persona 仍在系统提示词中强制协议；**任意** soft/违规起手词——
+  含"刚读到结果"式观察续写——立即重置连击并在下一步重新武装）；升级态
+  （drift level ≥ 1）永不降载；L3 结果锚永不降载（工具转场是漂移高发点）。
+  降载/重新武装的切换会写入会话日志，`analyze-session.mjs` 可据此核对实际锚数。
 
 ## 兼容性
 

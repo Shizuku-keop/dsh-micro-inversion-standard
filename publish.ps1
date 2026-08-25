@@ -23,7 +23,7 @@ param(
   [Parameter(Mandatory = $true)][string]$Token,
   [string]$RepoName = 'dsh-micro-inversion-standard',
   [ValidateSet('public', 'private')][string]$Visibility = 'public',
-  [string]$Tag = 'v2.2.0',
+  [string]$Tag = 'v2.3.0',
   [string]$Description = '微逆标准模式 (Micro-Inversion Standard) — a token-lean DSH agent preset that forces "we need" reasoning (bilingual EN/ZH) and slims context.',
   [switch]$SkipCreate,
   [switch]$SkipRelease
@@ -80,7 +80,7 @@ if (-not $SkipRelease) {
   $releaseBody = @{
     tag_name = $Tag
     name     = $Tag
-    body     = "See README.md for install & usage.`n`nRelease asset: dsh-micro-inversion-standard-$Tag.zip (extract and run install.ps1 / install.sh).`n`nCurrent preset version: 2.2.0 (v5 hardening: bilingual EN/ZH detection, post-compaction budget, transactional install, 33 automated tests)."
+    body     = "See README.md for install & usage.`n`nRelease asset: dsh-micro-inversion-standard-$Tag.zip (extract and run install.ps1 / install.sh).`n`nCurrent preset version: 2.3.0 (v6 stable-compliance anchor throttling, integrity gate + session forensics tooling, 40 automated tests)."
   } | ConvertTo-Json
   $release = Invoke-RestMethod -Uri "$api/repos/$owner/$RepoName/releases" -Headers $headers -Method Post -ContentType 'application/json' -Body $releaseBody
 

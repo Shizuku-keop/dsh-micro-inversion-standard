@@ -13,7 +13,7 @@ Token 消耗压到最低。
 | `tool-bootstrap.mjs` | 阶段一锚定 + 动态晋升状态机 + L1 认知 persona 构建 |
 | `context-slimmer.mjs` | `tools/post-execute` 结果裁剪/落盘 + `agent/pre-step` 80% 压力压缩 |
 | `anchor-sustainer.mjs` | v2 全局锚：L2 近场锚 + L3 结果锚 + D 漂移检测闭环（中英文双语） |
-| `test/` | node:test 自动化测试（33 项，`npm test`） |
+| `test/` | node:test 自动化测试（40 项，`npm test`） |
 
 ## 需求如何落地
 
@@ -42,7 +42,8 @@ persona。晋升判定在 `step/end`/`turn/end` 边界刷新（绝不在工具�
 - **L1 认知换装**：晋升时把阶段一极简 persona 整体替换为"集体执行单元"认知 persona
   （身份重塑 + 显式 CoT 语法 + FORBIDDEN openers 黑名单 + 转场规则 + 自检 + 抗漂移 +
   v3 完整性/深度条款）。
-- **L2 近场锚**：每次 `agent/pre-step` 在 messages 尾部注入恒定微指令（注意力最强处）。
+- **L2 近场锚**：每次 `agent/pre-step` 在 messages 尾部注入恒定微指令（注意力最强处）；
+  v6 起在连续 `throttleAfterConforms` 个合规块后跳过（见下）。
 - **L3 结果锚**：每个被接受的工具结果经 harness 原生 `additionalContexts`
   （"结果 → 下一请求"通道）挂接续锚，不改结果文本、不污染日志。
 - **D 漂移检测**：增量扫描 `session.events` 中每条 `assistant/message` 的
@@ -54,6 +55,10 @@ persona。晋升判定在 `step/end`/`turn/end` 边界刷新（绝不在工具�
 - **v5 双语**：`CONFORM_RE` / `VIOLATION_RE` 同时匹配英文与中文起手词
   （"我们需要/我们来/让我们"、"让我/我想/我认为…"），中文思维链也能被正确检测；
   漂移级别变化会写入会话日志（可观测性）。
+- **v6 稳态锚降载**：连续 `throttleAfterConforms`（默认 4）个合规推理块后，
+  L2 近场锚停止注入（L1 persona 仍在系统提示词中强制协议）；`scanAndClassify`
+  中 **soft 起手词也重置连击**（任何非合规起手词下一步立即重新武装）；升级态
+  （level ≥ 1）永不降载；L3 结果锚永不降载。降载/重新武装切换写入会话日志。
 
 ### 4. 上下文瘦身（Context Slimming）
 - `tools/post-execute`（prepend）：成功工具结果文本超过 `resultTrimThresholdChars`
@@ -98,18 +103,22 @@ persona。晋升判定在 `step/end`/`turn/end` 边界刷新（绝不在工具�
   `resultTailChars`、`pressureRatio`（0.8）、`surfaceHeadChars` /
   `surfaceTailChars`、`spillResults`（默认开）、`spillTrimmedSurface`（默认关）、
   `skipTools`、`dropProtectedUnderPressure`（v5，默认关）。
-- `anchor-sustainer`：`maxAnchorsInSurface`（1）、`anchorAfterToolResult`（false）。
+- `anchor-sustainer`：`maxAnchorsInSurface`（1）、`anchorAfterToolResult`（false）、
+  `throttleAfterConforms`（v6，默认 4，0 关闭）。
 - **v5 容错**：未知配置键只告警忽略（不再导致整个预设挂载失败）；类型/范围错误仍会
   抛错（这是真错误）。
 
 ## 验证
 
-- 自动化：`npm test`（test/，33 项：晋升状态机 / 裁剪切分 / 漂移扫描 / 双语分类 /
-  v5 新行为）。
+- 自动化：`npm test`（test/，40 项：晋升状态机 / 裁剪切分 / 漂移扫描 / 双语分类 /
+  v5 新行为 / v6 稳态降载）；`node scripts/validate.mjs` 零依赖完整性门禁
+  （CI 自动执行两者）。
 - 手工验收：`preset/TEST.md`（request/header 线缆级验证方法），新建使用本预设的会话：
   - 首条请求只应看到 `bash`/`pwsh` + `str_replace_editor` 两个工具；
   - 首次工具调用或首次回复后，工具目录立即变为完整标准目录；
   - 大输出（>8192 字符）应被裁剪并出现 spill locator；上下文压力 ≥80% 时中段被
-    压缩标记替换；中文起手（"我们需要 …"）与英文起手均被 D 检测识别。
+    压缩标记替换；中文起手（"我们需要 …"）与英文起手均被 D 检测识别；
+  - v6：连续 4+ 合规块后 L2 锚停止注入（日志 throttled），任意非合规起手词后
+    立即 re-armed。
 
 （本预设是用户根目录下的自有预设，升级不会被覆盖；要改动它直接编辑本目录。）
